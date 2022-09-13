@@ -1,0 +1,656 @@
+#!/bin/bash
+
+get_github_token(){
+    local locations=(
+        "$HOME/Sync/$USER/.githubtoken"
+        "$HOME/.githubtoken"
+        "/etc/githubtoken"
+    )    
+    for l in "${locations[@]}"; do
+        if [ -f "$l" ];then
+            GITHUB_TOKEN="--header \"Authorization: token $(cat $l)\""            
+            export GITHUB_TOKEN
+            break
+        fi
+    done
+}
+
+get_env_vars(){
+    #try default locations
+    local locations=( 
+        "$HOME/Sync/puckman"
+        "$HOME/.config/puckman"
+        "/etc/puckman"
+    )
+    PUCKMAN_LIST=""
+    PUCKMAN_DESCRIPTIONS=""
+    for l in "${locations[@]}"; do
+        if [ -d "$l" ];then
+            PUCKMAN_LIST="${l}/packages.txt"
+            PUCKMAN_DESCRIPTIONS="${l}/descriptions.txt"
+            PUCKMAN_CONFIG="${l}/puckman.conf"
+            break
+        fi
+    done
+
+    [ -z "$PUCKMAN_CACHE" ] && PUCKMAN_CACHE=/var/cache/tmp/puckman
+    export PUCKMAN_CACHE
+    [ -z "$PUCKMAN_PKG" ] && PUCKMAN_PKG=/var/cache/puckman
+    export PUCKMAN_PKG
+    [ -z "$PUCKMAN_CONFIG" ] && PUCKMAN_CONFIG="/etc/puckman/puckman.conf"
+    export PUCKMAN_CONFIG
+    [ -z "$PUCKMAN_DESCRIPTIONS" ] && PUCKMAN_DESCRIPTIONS="/etc/puckman/descriptions.txt"
+    export PUCKMAN_DESCRIPTIONS
+    [ -z "$PUCKMAN_LIST" ] && PUCKMAN_LIST="/etc/puckman/packages.txt"
+    export PUCKMAN_LIST
+}
+
+levenshtein() {
+    if [ "$#" -ne "2" ]; then
+        echo "Usage: $0 word1 word2" >&2
+    elif [ "${#1}" -lt "${#2}" ]; then
+        levenshtein "$2" "$1"
+    else
+        local str1len=$((${#1}))
+        local str2len=$((${#2}))
+        local d i j
+        for i in $(seq 0 $(((str1len+1)*(str2len+1)))); do
+            d[i]=0
+        done
+        for i in $(seq 0 $((str1len))); do
+            d[$((i+0*str1len))]=$i
+        done
+        for j in $(seq 0 $((str2len))); do
+            d[$((0+j*(str1len+1)))]=$j
+        done
+
+        for j in $(seq 1 $((str2len))); do
+            for i in $(seq 1 $((str1len))); do
+                [ "${1:i-1:1}" = "${2:j-1:1}" ] && local cost=0 || local cost=1
+                local del=$((d[(i-1)+str1len*j]+1))
+                local ins=$((d[i+str1len*(j-1)]+1))
+                local alt=$((d[(i-1)+str1len*(j-1)]+cost))
+                d[i+str1len*j]=$(echo -e "$del\n$ins\n$alt" | sort -n | head -1)
+            done
+        done
+        echo ${d[str1len+str1len*(str2len)]}
+    fi
+# while read str1; do
+#         while read str2; do
+#                 lev=$(levenshtein "$str1" "$str2");
+#                 printf '%s / %s : %s\n' "$str1" "$str2" "$lev"
+#         done < "$2"
+# done < "$1"
+}
+
+search (){
+    #expects search term in global variable $package and modifies it to reflect the result
+    local search_results
+
+    readarray -t search_results < <(github_search "$package")
+    [  ${#search_results[@]} -lt 1 ] && return 1
+    echo "----------------------"
+    echo "Search results"
+    echo 
+    for index in "${!search_results[@]}";do echo "$((index + 1)). ${search_results[$index]}";done
+    #printf "%s\n" "${search_results[@]}"
+    echo
+    read -rp "Do you want to install any of them? Enter a number or just press <return> to skip" index
+
+    if [[ "$index" =~ ^[0-9]+$ ]] && [ "$index" -gt 0 ] && [ "$index" -le  ${#index[@]} ];then
+        package=$(echo "${search_results[((index - 1))]}" | awk '{print $1}')
+        export package
+        return 0
+    fi
+    return 1
+}
+github_search(){
+    # query github with query string and return projects sorted by stars
+    local query="$1"
+    $WGET --header "Accept: application/vnd.github+json" "$GITHUB_TOKEN" "https://api.github.com/search/repositories?q=$query in:name,description" -qO - \
+    | jq  -r '.items | sort_by(.stargazers_count) |reverse | .[]| "\(.full_name)\t\(.stargazers_count)\t\(.description)"'  | head -n20 | column -ts $'\t'
+}
+github_release(){
+    if [ -n "$1" ];then 
+        $WGET --header "Accept: application/vnd.github+json" "$GITHUB_TOKEN" "https://api.github.com/repos/$1/releases/latest" -qO - | jq -r '.assets[].browser_download_url'        
+    else
+        echo "Please provide github  <user/project> string e.g. borgbackup/borg"; 
+        return 1
+    fi
+    return 0
+}
+
+trim() {
+    local var="$*"
+    # remove leading whitespace characters
+    var="${var#"${var%%[![:space:]]*}"}"
+    # remove trailing whitespace characters
+    var="${var%"${var##*[![:space:]]}"}"
+    printf '%s' "$var"
+}
+
+url_size(){
+    local output
+    output=$($WGET --spider --server-response -q "$1" 2>&1 |grep -i content-length | awk '{$1=""}1'|tail -n1)
+    trim "$output"
+}
+
+url_timestamp(){
+    local output
+    output=$($WGET --spider --server-response -q "$1" 2>&1 |grep -i last-modified | awk '{$1=""}1'|tail -n1)
+    output=$(date -d "$output" +%s)
+    trim "$output"
+}
+
+archive_count(){
+    #output count of files in archive 
+    # if count=1 also orig name and final name
+    # files to ignore
+    release_artifacts_to_ignore='.*txt$\|LICENSE\|.*md$\|README$\|NEWS$\|CHANGELOG$\|\/$'
+    local count=0
+    local temp=$(mktemp)
+    local original_name="-"
+    local final_name="-"
+    case $# in
+        1) 
+            local file="$1"
+            [ ! -f "$PUCKMAN_PKG/$file" ] && echo 0 && return 1
+            ;;
+        *) 
+            echo 0 && return 1
+            ;;
+    esac
+    case $file in
+        *.zip)
+            unzip -Z1 "$PUCKMAN_PKG/$file" | grep -iv "$release_artifacts_to_ignore" > $temp
+            count=$(wc -l "$temp" | awk '{print $1}')
+            ;;
+        *.tar.gz|*.tgz|*.tbz|*.tar.xz|*.txz|*.tar.bz2|*.tbz2)
+            tar -tf "$PUCKMAN_PKG/$file" | grep -iv "$release_artifacts_to_ignore" > $temp
+            count=$(wc -l "$temp" | awk '{print $1}')
+            ;;
+        *.bz2)
+            count=1
+            original_name="${file%.bz2}"
+            final_name="/usr/local/bin/$(expr match "$final_name" '\([a-z]\+\)')"
+            echo "${count}#${original_name}#${final_name}"
+            return 0
+            ;;
+    esac
+
+    #OUTPUT:
+    # count#orig#final
+    if [ $count -eq 1 ];then
+        original_name=$(cat $temp)
+        final_name=/usr/local/bin/$(expr match "$original_name" '\([a-z]\+\)')
+    fi
+    echo "${count}#${original_name}#${final_name}"
+    return 0
+}
+
+get_download_link(){
+    local bits=$(getconf LONG_BIT) # just 32 or 64
+    local arch_uname=$(uname -m)  #prints values such as x86_64, i686, arm, or aarch64
+    # also only for debuntu: dpkg --print-architecture
+    local arch_other=""
+    local arch_weird=""
+    case $arch_uname in
+        i386|i686) arch_other="386" ;;
+        x86_64)    arch_other="amd64" ;;
+        arm)       arch_other="arm" ;;
+    esac
+    case $arch_uname in
+        i386|i686) arch_weird="intel" ;;
+        x86_64)    arch_weird="intel" ;;
+        arm)       arch_weird="arm" ;;
+    esac
+
+    #Smart select without regex (it's just a bunch of IFs)
+    local release_temp=$(mktemp)
+    local candidates_temp=$(mktemp)
+    local candidates_count=0
+    github_release $link > $release_temp
+
+    #try to find deb
+    cat $release_temp | grep 'deb$'| grep $arch_other > $candidates_temp
+    candidates_count=$(wc -l $candidates_temp | awk '{print $1}')
+    [ $candidates_count -eq 1 ] && cat $candidates_temp && return 0
+    # sometimes a musl and non-musl release exist. We just pick one
+    [ $candidates_count -gt 1 ] && cat $release_temp | grep 'deb$'| grep $arch_other | grep -v musl > $candidates_temp
+    candidates_count=$(wc -l $candidates_temp | awk '{print $1}')
+    [ $candidates_count -eq 1 ] && cat $candidates_temp && return 0
+
+    cat $release_temp | grep 'deb$'| grep $arch_uname > $candidates_temp
+    candidates_count=$(wc -l $candidates_temp | awk '{print $1}')
+    [ $candidates_count -eq 1 ] && cat $candidates_temp && return 0
+    # sometimes a musl and non-musl release exist. We just pick one
+    [ $candidates_count -gt 1 ] && cat $release_temp | grep 'deb$'| grep $arch_uname | grep -v musl > $candidates_temp
+    candidates_count=$(wc -l $candidates_temp | awk '{print $1}')
+    [ $candidates_count -eq 1 ] && cat $candidates_temp && return 0    
+
+    # if no deb exists, we discard rpm and pray to the fortune gods
+    cat $release_temp |  grep -v 'deb$\|rpm$\|asc$' | grep $arch_uname > $candidates_temp
+    candidates_count=$(wc -l $candidates_temp | awk '{print $1}')
+    [ $candidates_count -eq 1 ] && cat $candidates_temp && return 0
+    # sometimes there are releases for other (heretic) OSes. We select the one and only:
+    cat $release_temp |  grep -v 'deb$\|rpm$\|asc$' | grep $arch_uname | grep linux > $candidates_temp
+    candidates_count=$(wc -l $candidates_temp | awk '{print $1}')
+    [ $candidates_count -eq 1 ] && cat $candidates_temp && return 0
+
+    cat $release_temp |  grep -v 'deb$\|rpm$\|asc$' | grep $arch_other > $candidates_temp
+    candidates_count=$(wc -l $candidates_temp | awk '{print $1}')
+    [ $candidates_count -eq 1 ] && cat $candidates_temp && return 0
+    # sometimes there are releases for other (heretic) OSes. We select the one and only:
+    cat $release_temp |  grep -v 'deb$\|rpm$\|asc$' | grep $arch_other | grep linux > $candidates_temp
+    candidates_count=$(wc -l $candidates_temp | awk '{print $1}')
+    [ $candidates_count -eq 1 ] && cat $candidates_temp && return 0
+
+    # if no deb exists, we discard rpm and pray to the fortune gods
+    
+    cat $release_temp |  grep -v 'deb$\|rpm$\|asc$' | grep $bits > $candidates_temp
+    candidates_count=$(wc -l $candidates_temp | awk '{print $1}')
+    [ $candidates_count -eq 1 ] && cat $candidates_temp && return 0
+    # sometimes there are releases for other (heretic) OSes. We select the one and only:
+    cat $release_temp |  grep -v 'deb$\|rpm$\|asc$' | grep $bits | grep linux > $candidates_temp
+    candidates_count=$(wc -l $candidates_temp | awk '{print $1}')
+    [ $candidates_count -eq 1 ] && cat $candidates_temp && return 0
+
+    # some sadistic creatures release with intel as an arch name
+    cat $release_temp |  grep -v 'deb$\|rpm$\|asc$' | grep $arch_weird > $candidates_temp
+    candidates_count=$(wc -l $candidates_temp | awk '{print $1}')
+    [ $candidates_count -eq 1 ] && cat $candidates_temp && return 0
+    cat $release_temp |  grep -v 'deb$\|rpm$\|asc$' | grep $arch_weird | grep $bits > $candidates_temp
+    candidates_count=$(wc -l $candidates_temp | awk '{print $1}')
+    [ $candidates_count -eq 1 ] && cat $candidates_temp && return 0
+
+    # sometimes even linux and 64bit is all you need
+    cat $release_temp |  grep -v 'deb$\|rpm$\|asc$' | grep linux | grep $bits > $candidates_temp
+    candidates_count=$(wc -l $candidates_temp | awk '{print $1}')
+    [ $candidates_count -eq 1 ] && cat $candidates_temp && return 0
+        
+    # If everything failed, try regex
+    if [ -n "$regex" ];then
+        cat $release_temp | grep -m 1 -E "$regex" | tr -d '"'    
+    fi
+
+}
+install(){
+    local link=""
+    local regex=""
+    local download_link=""
+    local download_file=""
+    local original_name=""
+    local final_name=""
+    local count=0
+    local temp=$(mktemp)
+    local temp_dir=$(mktemp -d)
+    
+    
+    local matches=$(grep -c "$package" "$PUCKMAN_LIST")
+    if [ -z $matches ] || [ $matches -eq 0 ];then
+        echo
+        echo "No matches for [ $package ]."
+        echo
+        echo "Searching for candidates:"
+        
+        if ! search "$package" ;then 
+            return 1
+        else
+            link="$package"
+        fi
+    elif [ $matches -gt 1 ];then
+        echo
+        echo "More than one match found for [ $package ]. Refine your search term."
+        echo "Results:"
+        #TODO select
+        echo
+        grep "$package" "$PUCKMAN_LIST"
+        echo
+        return 1
+    elif [ $matches -eq 1 ];then
+        # Read regex and link and check if not empty
+        IFS="#" read -r link regex < <(grep "$package" "$PUCKMAN_LIST")
+
+        if [[ -z "$regex" ]]; then
+            echo "No regex defined: $link"
+        fi
+    fi
+    # At this point we should have at least a desired project
+    # Check if it is already in the config file and add it otherwise
+    if ! grep "$package" "$PUCKMAN_LIST";then
+        echo "Adding package $package to list in $PUCKMAN_LIST"
+        echo "$package" >> $PUCKMAN_LIST
+    fi
+    #If regex is a pip command we don't need to try github at all
+    if [[ "$regex" =~ pip|pip2|pip3 ]];then
+        #regex should be the appropriate command and link the package name
+        echo "installing $link using pip"
+        echo "COMMAND: $regex install --upgrade $link"
+        sudo $regex install --upgrade $link
+        return $?
+    fi
+
+    download_link=$(get_download_link)
+
+    if [[ -z "$download_link" ]]; then
+        echo "package $package not found" && return 1
+    fi
+    
+    download_file=$(basename $download_link)
+    if [[ -z "$download_file" ]]; then
+        echo "download link is wrong or bad format. Download link is: $download_link" && return 1
+    fi
+
+    local download=0
+    if [ -f "$PUCKMAN_PKG/$download_file" ];then
+        download=-1
+        echo "File $download_file already exists. Checking similarities"
+        local url_size=$(url_size "$download_link")
+        local url_timestamp=$(url_timestamp "$download_link")
+        local local_size=$(stat --format %s "$PUCKMAN_PKG/$download_file")
+        local local_timestamp=$(stat --format %Y "$PUCKMAN_PKG/$download_file")
+
+        echo 
+        echo "local_timestamp: $local_timestamp"
+        echo "url_timestamp:   $url_timestamp"
+        echo "local_size:      $local_size"
+        echo "url_size:        $url_size"
+        echo
+
+        if [ $local_size -ne $url_size ] || [ $local_timestamp -ne $url_timestamp ];then 
+            echo "Size or date don't match. Download the file"
+            download=0
+        fi
+    fi
+    if [ $download -eq 0 ];then 
+        echo Downloading...
+        [ -n "$regex" ] && find $PUCKMAN_PKG -type f -iregex '.*'"$regex" -delete
+        cd  $PUCKMAN_PKG && wget "$download_link" && cd -
+    fi
+
+    # - actually install (basename extension, tar, deb etc)
+    
+    IFS="#" read -r count original_name final_name < <(archive_count "$download_file")
+    case $download_file in
+        *.deb)
+            echo "It is a debian package. Install with dpkg:"
+            local package_name=$(dpkg-deb -I  $PUCKMAN_PKG/$download_file  | grep -Po '(?<=Package: ).*')
+            local package_version=$(dpkg-deb -I  $PUCKMAN_PKG/$download_file  | grep -Po '(?<=Version: ).*')
+            if dpkg --get-selections | grep $package_name &> /dev/null ;then
+                #already installed, check version
+                local installed_package_version=$(apt info $package_name | grep -Po '(?<=Version: ).*')
+                if [ "$package_version" = "$installed_package_version" ];then 
+                    echo ""
+                    echo "Version $package_version of package $package_name is already installed"
+                    echo ""
+                    echo "You can manually install the package with:"
+                    echo "sudo dpkg -i $PUCKMAN_PKG/$download_file"
+                    return 0
+                else
+                    echo "Version $installed_package_version of package $package_name is already installed. Proceeding to install new version: $package_version"
+                fi
+            fi
+            echo "INSTALLING DEB PACKAGE: sudo dpkg -i $PUCKMAN_PKG/$download_file"
+            sudo dpkg -i $PUCKMAN_PKG/$download_file
+            sudo apt install -f
+            ;;
+        *.zip)
+            if [ $count -eq 1 ];then
+                # original and final names calculated in archive_count
+                echo "It is an archive with only one file (after discarding irrelevant artifacts). Hopefully a binary alone. Trying to install to /usr/local/bin"
+                echo "Candidate file is: $original_name"
+                cd $PUCKMAN_CACHE
+                unzip -n $PUCKMAN_PKG/$download_file
+                cp "$PUCKMAN_CACHE/$original_name" "$final_name"
+                cd -
+                echo "Installed to $final_name"
+            else
+                echo There seems to be more than a single binary. 
+                echo You are on your own. Package has already been downloaded to:
+                echo $PUCKMAN_PKG/$download_file
+            fi
+            ;;
+        *.tar.gz|*.tgz|*.tbz|*.tar.xz|*.txz|*.tar.bz2|*.tbz2)
+            if [ $count -eq 1 ];then
+                echo "It is an archive with only one file (after discarding irrelevant artifacts). Hopefully a binary alone. Trying to install to /usr/local/bin"
+                echo "Candidate file is: $original_name"
+                cd "$PUCKMAN_CACHE"
+                tar -xf $PUCKMAN_PKG/$download_file
+                local final_name=/usr/local/bin/$(expr match "$original_name" '\([a-z]\+\)')
+                cp "$PUCKMAN_CACHE/$original_name" "$final_name"
+                cd -
+                echo "Installed to $final_name"
+            else
+                echo There seems to be more than a single binary. 
+                echo You are on your own. Package has already been downloaded to:
+                echo $PUCKMAN_PKG/$download_file
+            fi
+            ;;
+        *.bz2)
+            echo it is a non-tar bz2. Hopefully a binary alone
+            #local final_name=${download_file%.bz2}
+            bunzip2 $PUCKMAN_PKG/$download_file
+            chmod +x $PUCKMAN_PKG/$original_name
+            echo "Copying to /usr/local/bin/"$(expr match "$final_name" '\([a-z]\+\)')
+            sudo cp $PUCKMAN_PKG/$final_name "$final_name"
+            #sudo cp $PUCKMAN_PKG/$final_name /usr/local/bin/${final_name%%_*}
+            ;;
+        *)
+            if file $PUCKMAN_PKG/$download_file | grep ELF &> /dev/null ;then
+                echo it is a binary
+            fi
+            ;;
+    esac
+
+    return 0
+    # fi
+    # echo "I don't know how to $action $package."
+    # return 1
+}
+
+file_age(){
+    if [ -e "$1" ] && [ -f "$1" ] && [ -s "$1" ];then
+        echo "$((($(date +%s) - $(date +%s -r "$1")) / 86400)) days"
+    else
+        echo "0 days"
+    fi
+}
+list(){
+    local n=15
+    local n_days_ago=/tmp/${n}_days_ago
+    touch -d "$n days ago" $n_days_ago
+    if user_is_root ;then
+        if [ ! -f $PUCKMAN_DESCRIPTIONS ] || [ $PUCKMAN_DESCRIPTIONS -ot $n_days_ago ] || [ $(grep -c '^' $PUCKMAN_DESCRIPTIONS) -ne $(grep -c '/' $PUCKMAN_LIST) ];then
+            local tmp_file=$(mktemp)
+            while read -r project;do
+                { echo -en "$project\t"; $WGET  --header "Accept: application/vnd.github+json" "$GITHUB_TOKEN" "https://api.github.com/repos/$project" -qO - | jq .stargazers_count,.description | awk -v d="\t" '{s=(NR==1?s:s d)$0}END{print s}' ;} >> $tmp_file
+            done < <(cut -d '#' -f 1 $PUCKMAN_LIST| grep '/')
+            mv $tmp_file $PUCKMAN_DESCRIPTIONS
+        fi
+    else
+        if [ -e $PUCKMAN_DESCRIPTIONS ] && [ -f $PUCKMAN_DESCRIPTIONS ] && [ -s $PUCKMAN_DESCRIPTIONS ] ;then
+            if [ $PUCKMAN_DESCRIPTIONS -ot $n_days_ago ];then
+                echo -en "Descriptions list in $PUCKMAN_DESCRIPTIONS is "; file_age "$PUCKMAN_DESCRIPTIONS"; echo" old"
+                echo "Consider running 'puckman ls' with root to update it"
+            fi
+        else
+            echo "Description file $PUCKMAN_DESCRIPTIONS does not exist. Run with root to create one."
+            return 1
+        fi
+    fi
+    echo
+    echo -e "PROJECT\tSTARS\tDESCRIPTION\n$(cat $PUCKMAN_DESCRIPTIONS | sort )"| column -ts $'\t'
+    return 0
+}
+readconfig(){
+    # -e file exists
+    # -f file is a regular file (not a directory or device file)
+    # -s file is not zero size
+    { [ -e $PUCKMAN_CONFIG ] && [ -f $PUCKMAN_CONFIG ] && [ -s $PUCKMAN_CONFIG ] ;} || { echo Config file $PUCKMAN_CONFIG not found or empty ; return 1 ;}
+    local tmpfile=$(mktemp /tmp/$__base.XXXXXX)
+    grep -Ei '^[[:space:]]*[a-z_.-]+=[^[;,`()%$!#]+[[:space:]]*$' $PUCKMAN_CONFIG > $tmpfile
+    echo "Readed options from file $tmpfile:"
+    cat $tmpfile
+    # Ask only if we are interactive
+    if [ -n "$PS1" ] ; then
+        while true; do
+            read -rp "Do you want to continue? y / n: " yn
+            case $yn in
+                [Yy] )
+                    source $tmpfile
+                    break;;
+                [Nn] )
+                    echo User cancelled
+                    exit 1;;
+                * ) echo "Please answer with y or n.";;
+            esac
+        done
+    else
+        source $tmpfile
+    fi
+    rm -f $tmpfile
+}
+
+user_is_root(){
+    if [ "$EUID" -ne 0 ];then
+        return 1
+    fi
+    return 0
+}
+check_environment (){
+    local var_path
+    local var_value
+    TTY=$(tty)
+    while  read -r line;do
+        var_value="${!line}"
+        var_path="${var_value%/*.*}"
+        echo --------------------
+        echo $line=$var_value
+        echo $var_path
+        
+        if [ ! -d "$var_path" ];then
+            echo Location does not exist:
+            echo ${line}=$var_value
+            echo PATH: $var_path
+            echo
+            while true; do
+                read -rp "Should I try to create $var_path? y / n: " yn < $TTY
+                case $yn in
+                    [Yy] )
+                        mkdir -p "$var_path"
+                        break
+                        ;;
+                    [Nn] )
+                        echo "You can use a config file to change the path of $line as needed. "
+                        exit 1
+                        ;;
+                    * ) echo "Please answer with y or n.";;
+                esac
+            done
+        fi
+    done < <(set -o posix; set  | grep '^PUCKMAN_' |cut -d '=' -f 1 )
+}
+###############
+###Real MEAT###
+###############
+
+# Directory where this script is located
+# __dir=/root/cmk/local
+__dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Full path and filename
+# __file=/root/cmk/local/mk_vhosts
+__file="${__dir}/$(basename "${BASH_SOURCE[0]}")"
+# Only filename
+# __base=mk_vhosts
+__base="$(basename ${__file} .sh)"
+# Parent folder
+# __root=/root/cmk
+__root="$(cd "$(dirname "${__dir}")" && pwd)"
+
+check_environment
+
+usage="
+puckman
+=======
+Installs software from github releases
+
+Usage:
+    puckman <action> [package name]
+
+Actions:
+    ls
+            list available packages
+
+    install <package name>
+            duh!
+
+    search <search term>
+            searches repositories in github. It presents a limited set of the
+            most popular results and offers the possibility to install
+
+    <package name>
+            (no action specified) search and install if unique
+
+"
+
+WGET="wget -T 5 --tries=1"
+GITHUB_TOKEN=""
+
+get_env_vars
+get_github_token
+
+readconfig
+
+check_environment
+
+case $# in
+    0) 
+        echo "$usage" && exit 0
+        ;;
+    1) 
+        case "$1" in
+            h|-h|--help|help)
+                echo "$usage" && exit 0
+                ;;
+            ls|list)
+                action=list
+                ;;
+            *)
+                action=install
+                package="$1"
+                ;;
+        esac
+        ;;
+    2) 
+        action="$1"
+        package="$2"
+        ;;
+    *) 
+        echo $usage && exit 1
+        ;;
+esac
+
+
+case $action in
+    remove|uninstall|delete)
+        echo "Action $action not implemented" && exit 1
+        ;;
+    list)
+        list
+        exit $?
+        ;;
+    install)
+        user_is_root || { echo "User must be root to $action $package" && exit 1 ;}
+        install
+        ;;
+    search|query|find)
+        if search;then
+            install
+        fi
+        ;;
+    *)
+        echo "I don't know how to $action $package"
+        exit 1
+        ;;
+esac
+exit 0
