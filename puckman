@@ -482,32 +482,18 @@ list(){
     echo -e "PROJECT\tSTARS\tDESCRIPTION\n$(cat $PUCKMAN_DESCRIPTIONS | sort )"| column -ts $'\t'
     return 0
 }
+showconfig(){
+    (set -o posix; set  | grep '^PUCKMAN_')
+}
+
 readconfig(){
     # -e file exists
     # -f file is a regular file (not a directory or device file)
     # -s file is not zero size
-    { [ -e $PUCKMAN_CONFIG ] && [ -f $PUCKMAN_CONFIG ] && [ -s $PUCKMAN_CONFIG ] ;} || { echo Config file $PUCKMAN_CONFIG not found or empty ; return 1 ;}
+    { [ -e $PUCKMAN_CONFIG ] && [ -f $PUCKMAN_CONFIG ] && [ -s $PUCKMAN_CONFIG ] ;} || return 1
     local tmpfile=$(mktemp /tmp/$__base.XXXXXX)
     grep -Ei '^[[:space:]]*[a-z_.-]+=[^[;,`()%$!#]+[[:space:]]*$' $PUCKMAN_CONFIG > $tmpfile
-    echo "Readed options from file $tmpfile:"
-    cat $tmpfile
-    # Ask only if we are interactive
-    if [ -n "$PS1" ] ; then
-        while true; do
-            read -rp "Do you want to continue? y / n: " yn
-            case $yn in
-                [Yy] )
-                    source $tmpfile
-                    break;;
-                [Nn] )
-                    echo User cancelled
-                    exit 1;;
-                * ) echo "Please answer with y or n.";;
-            esac
-        done
-    else
-        source $tmpfile
-    fi
+    source $tmpfile
     rm -f $tmpfile
 }
 
@@ -596,13 +582,6 @@ Actions:
 WGET="wget -T 5 --tries=1"
 GITHUB_TOKEN=""
 
-get_env_vars
-get_github_token
-
-readconfig
-
-check_environment
-
 case $# in
     0) 
         echo "$usage" && exit 0
@@ -630,6 +609,14 @@ case $# in
         ;;
 esac
 
+get_env_vars
+get_github_token
+
+readconfig
+
+check_environment
+
+showconfig
 
 case $action in
     remove|uninstall|delete)
