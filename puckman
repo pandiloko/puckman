@@ -228,6 +228,11 @@ get_download_link(){
     candidates_count=$(wc -l $candidates_temp | awk '{print $1}')
     [ $candidates_count -eq 1 ] && cat $candidates_temp && return 0    
 
+    # Sometimes there is only one deb file and no arch references
+    cat $release_temp | grep 'deb$'  > $candidates_temp
+    candidates_count=$(wc -l $candidates_temp | awk '{print $1}')
+    [ $candidates_count -eq 1 ] && cat $candidates_temp && return 0    
+
     # if no deb exists, we discard rpm and pray to the fortune gods
     cat $release_temp |  grep -v 'deb$\|rpm$\|asc$' | grep $arch_uname > $candidates_temp
     candidates_count=$(wc -l $candidates_temp | awk '{print $1}')
@@ -467,6 +472,8 @@ list(){
             done < <(cut -d '#' -f 1 $PUCKMAN_LIST| grep '/')
             mv $tmp_file $PUCKMAN_DESCRIPTIONS
         fi
+        # Make sure others have read access
+        chmod uga+r "$PUCKMAN_DESCRIPTIONS"
     else
         if [ -e $PUCKMAN_DESCRIPTIONS ] && [ -f $PUCKMAN_DESCRIPTIONS ] && [ -s $PUCKMAN_DESCRIPTIONS ] ;then
             if [ $PUCKMAN_DESCRIPTIONS -ot $n_days_ago ];then
@@ -510,9 +517,9 @@ check_environment (){
     while  read -r line;do
         var_value="${!line}"
         var_path="${var_value%/*.*}"
-        echo --------------------
-        echo $line=$var_value
-        echo $var_path
+        #echo --------------------
+        #echo $line=$var_value
+        #echo $var_path
         
         if [ ! -d "$var_path" ];then
             echo Location does not exist:
@@ -616,7 +623,6 @@ readconfig
 
 check_environment
 
-showconfig
 
 case $action in
     remove|uninstall|delete)
@@ -628,6 +634,7 @@ case $action in
         ;;
     install)
         user_is_root || { echo "User must be root to $action $package" && exit 1 ;}
+        showconfig
         install
         ;;
     search|query|find)
