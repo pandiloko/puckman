@@ -7,3 +7,6 @@ It smartly identifies the appropriate installer from the list of release artifac
 It is possible to define a regex to make sure the right package is selected. People do sometimes use strange names and formats for the release packages. 
 
 It is optimized for debian/ubuntu systems. 
+
+Warning: it doesn't have any kind of journal or history. It can't uninstall. This is not a big issue for deb files but for single binary installations you have to manually remove the file from /usr/local/bin and fish the config files scattered through your file system. 
+
