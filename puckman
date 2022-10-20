@@ -95,7 +95,9 @@ search (){
     for index in "${!search_results[@]}";do echo "$((index + 1)). ${search_results[$index]}";done
     #printf "%s\n" "${search_results[@]}"
     echo
-    read -rp "Do you want to install any of them? Enter a number or just press <return> to skip" index
+    echo "Do you want to install any of them?"
+    echo "Enter a number or just press <return> to skip"
+    read -rp "Choose a number: " index
 
     if [[ "$index" =~ ^[0-9]+$ ]] && [ "$index" -gt 0 ] && [ "$index" -le  ${#index[@]} ];then
         package=$(echo "${search_results[((index - 1))]}" | awk '{print $1}')
@@ -189,6 +191,8 @@ archive_count(){
 }
 
 get_download_link(){
+    #Complex AI algorithm to determine what the fuck the user wants to install
+
     local bits=$(getconf LONG_BIT) # just 32 or 64
     local arch_uname=$(uname -m)  #prints values such as x86_64, i686, arm, or aarch64
     # also only for debuntu: dpkg --print-architecture
