@@ -387,7 +387,7 @@ install(){
             local package_version=$(dpkg-deb -I  $PUCKMAN_PKG/$download_file  | grep -Po '(?<=Version: ).*')
             if dpkg --get-selections | grep $package_name &> /dev/null ;then
                 #already installed, check version
-                local installed_package_version=$(apt info $package_name | grep -Po '(?<=Version: ).*')
+                local installed_package_version=$(apt show $package_name | grep -Po '(?<=Version: ).*')
                 if [ "$package_version" = "$installed_package_version" ];then 
                     echo ""
                     echo "Version $package_version of package $package_name is already installed"
