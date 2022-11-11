@@ -99,7 +99,7 @@ search (){
     echo "Enter a number or just press <return> to skip"
     read -rp "Choose a number: " index
 
-    if [[ "$index" =~ ^[0-9]+$ ]] && [ "$index" -gt 0 ] && [ "$index" -le  ${#index[@]} ];then
+    if [[ "$index" =~ ^[0-9]+$ ]] && [ "$index" -gt 0 ] && [ "$index" -le  ${#search_results[@]} ];then
         package=$(echo "${search_results[((index - 1))]}" | awk '{print $1}')
         export package
         return 0
@@ -238,42 +238,42 @@ get_download_link(){
     [ $candidates_count -eq 1 ] && cat $candidates_temp && return 0    
 
     # if no deb exists, we discard rpm and pray to the fortune gods
-    cat $release_temp |  grep -v 'deb$\|rpm$\|asc$' | grep $arch_uname > $candidates_temp
+    cat $release_temp |  grep -v 'musl\|deb$\|rpm$\|asc$' | grep $arch_uname > $candidates_temp
     candidates_count=$(wc -l $candidates_temp | awk '{print $1}')
     [ $candidates_count -eq 1 ] && cat $candidates_temp && return 0
     # sometimes there are releases for other (heretic) OSes. We select the one and only:
-    cat $release_temp |  grep -v 'deb$\|rpm$\|asc$' | grep $arch_uname | grep linux > $candidates_temp
+    cat $release_temp |  grep -v 'musl\|deb$\|rpm$\|asc$' | grep $arch_uname | grep linux > $candidates_temp
     candidates_count=$(wc -l $candidates_temp | awk '{print $1}')
     [ $candidates_count -eq 1 ] && cat $candidates_temp && return 0
 
-    cat $release_temp |  grep -v 'deb$\|rpm$\|asc$' | grep $arch_other > $candidates_temp
+    cat $release_temp |  grep -v 'musl\|deb$\|rpm$\|asc$' | grep $arch_other > $candidates_temp
     candidates_count=$(wc -l $candidates_temp | awk '{print $1}')
     [ $candidates_count -eq 1 ] && cat $candidates_temp && return 0
     # sometimes there are releases for other (heretic) OSes. We select the one and only:
-    cat $release_temp |  grep -v 'deb$\|rpm$\|asc$' | grep $arch_other | grep linux > $candidates_temp
+    cat $release_temp |  grep -v 'musl\|deb$\|rpm$\|asc$' | grep $arch_other | grep linux > $candidates_temp
     candidates_count=$(wc -l $candidates_temp | awk '{print $1}')
     [ $candidates_count -eq 1 ] && cat $candidates_temp && return 0
 
     # if no deb exists, we discard rpm and pray to the fortune gods
     
-    cat $release_temp |  grep -v 'deb$\|rpm$\|asc$' | grep $bits > $candidates_temp
+    cat $release_temp |  grep -v 'musl\|deb$\|rpm$\|asc$' | grep $bits > $candidates_temp
     candidates_count=$(wc -l $candidates_temp | awk '{print $1}')
     [ $candidates_count -eq 1 ] && cat $candidates_temp && return 0
     # sometimes there are releases for other (heretic) OSes. We select the one and only:
-    cat $release_temp |  grep -v 'deb$\|rpm$\|asc$' | grep $bits | grep linux > $candidates_temp
+    cat $release_temp |  grep -v 'musl\|deb$\|rpm$\|asc$' | grep $bits | grep linux > $candidates_temp
     candidates_count=$(wc -l $candidates_temp | awk '{print $1}')
     [ $candidates_count -eq 1 ] && cat $candidates_temp && return 0
 
     # some sadistic creatures release with intel as an arch name
-    cat $release_temp |  grep -v 'deb$\|rpm$\|asc$' | grep $arch_weird > $candidates_temp
+    cat $release_temp |  grep -v 'musl\|deb$\|rpm$\|asc$' | grep $arch_weird > $candidates_temp
     candidates_count=$(wc -l $candidates_temp | awk '{print $1}')
     [ $candidates_count -eq 1 ] && cat $candidates_temp && return 0
-    cat $release_temp |  grep -v 'deb$\|rpm$\|asc$' | grep $arch_weird | grep $bits > $candidates_temp
+    cat $release_temp |  grep -v 'musl\|deb$\|rpm$\|asc$' | grep $arch_weird | grep $bits > $candidates_temp
     candidates_count=$(wc -l $candidates_temp | awk '{print $1}')
     [ $candidates_count -eq 1 ] && cat $candidates_temp && return 0
 
     # sometimes even linux and 64bit is all you need
-    cat $release_temp |  grep -v 'deb$\|rpm$\|asc$' | grep linux | grep $bits > $candidates_temp
+    cat $release_temp |  grep -v 'musl\|deb$\|rpm$\|asc$' | grep linux | grep $bits > $candidates_temp
     candidates_count=$(wc -l $candidates_temp | awk '{print $1}')
     [ $candidates_count -eq 1 ] && cat $candidates_temp && return 0
         
@@ -446,7 +446,10 @@ install(){
             ;;
         *)
             if file $PUCKMAN_PKG/$download_file | grep ELF &> /dev/null ;then
-                echo it is a binary
+                echo it is a single binary
+                echo installing to /usr/local/bin/$(basename $link)
+                cp $PUCKMAN_PKG/$download_file /usr/local/bin/$(basename $link)
+                chmod +x /usr/local/bin/$(basename $link)
             fi
             ;;
     esac
