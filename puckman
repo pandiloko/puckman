@@ -343,6 +343,7 @@ install(){
 
     if [[ -z "$download_link" ]]; then
         echo "package $package not found" && return 1
+        github_release $link
     fi
     
     download_file=$(basename $download_link)
@@ -550,21 +551,50 @@ check_environment (){
         fi
     done < <(set -o posix; set  | grep '^PUCKMAN_' |cut -d '=' -f 1 )
 }
+
+is_git_repo(){
+    git -C "$1" rev-parse 2>/dev/null; 
+    return $? # 0 = git repository
+}
+
+update(){
+    if is_git_repo "$__dir";then
+        # repo must be 'pristine' for this to work
+        # otherwise you're on your own
+        git -C "$__dir" pull || echo -e "Tried command:\n\ngit -C \"$__dir\" pull\n"
+    else
+        local url_size=$(url_size "$UPDATE_LINK")
+        local url_timestamp=$(url_timestamp "$UPDATE_LINK")
+        local local_size=$(stat --format %s "$__file")
+        local local_timestamp=$(stat --format %Y "$__file")
+
+        echo 
+        echo "local_timestamp: $local_timestamp"
+        echo "url_timestamp:   $url_timestamp"
+        echo "local_size:      $local_size"
+        echo "url_size:        $url_size"
+        echo
+
+        if [ $local_size -ne $url_size ] || [ $local_timestamp -ne $url_timestamp ];then 
+            echo "Size or date don't match. Download the file"
+            $WGET "$UPDATE_LINK" -o $__file
+         fi
+    fi
+}
+
+
+
 ###############
 ###Real MEAT###
 ###############
 
-# Directory where this script is located
-# __dir=/root/cmk/local
-__dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # Full path and filename
-# __file=/root/cmk/local/mk_vhosts
-__file="${__dir}/$(basename "${BASH_SOURCE[0]}")"
+__file="$(readlink -f "${BASH_SOURCE[0]}")"
+# Directory where this script is located
+__dir="$(cd "$(dirname "${__file}")" && pwd)"
 # Only filename
-# __base=mk_vhosts
 __base="$(basename ${__file} .sh)"
 # Parent folder
-# __root=/root/cmk
 __root="$(cd "$(dirname "${__dir}")" && pwd)"
 
 check_environment
@@ -595,6 +625,7 @@ Actions:
 
 WGET="wget -T 5 --tries=1"
 GITHUB_TOKEN=""
+UPDATE_LINK="https://raw.githubusercontent.com/pandiloko/puckman/master/puckman"
 
 case $# in
     0) 
@@ -602,6 +633,9 @@ case $# in
         ;;
     1) 
         case "$1" in
+            update|upgrade)
+                action=update
+                ;;
             h|-h|--help|help)
                 echo "$usage" && exit 0
                 ;;
@@ -632,6 +666,9 @@ check_environment
 
 
 case $action in
+    update)
+        update
+        ;;
     remove|uninstall|delete)
         echo "Action $action not implemented" && exit 1
         ;;
