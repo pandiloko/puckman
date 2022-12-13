@@ -577,7 +577,8 @@ update(){
 
         if [ $local_size -ne $url_size ] || [ $local_timestamp -ne $url_timestamp ];then 
             echo "Size or date don't match. Download the file"
-            $WGET "$UPDATE_LINK" -o $__file
+            echo "Downloading from link: $UPDATE_LINK to location: $__file"
+            $WGET "$UPDATE_LINK" -O $__file
          fi
     fi
 }
