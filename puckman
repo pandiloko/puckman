@@ -561,6 +561,7 @@ update(){
     if is_git_repo "$__dir";then
         # repo must be 'pristine' for this to work
         # otherwise you're on your own
+        echo "updating local repository under $__dir"
         git -C "$__dir" pull || echo -e "Tried command:\n\ngit -C \"$__dir\" pull\n"
     else
         local url_size=$(url_size "$UPDATE_LINK")
@@ -574,12 +575,18 @@ update(){
         echo "local_size:      $local_size"
         echo "url_size:        $url_size"
         echo
+        local temp=$(mktemp)
+        $WGET "$UPDATE_LINK" -O $temp
 
-        if [ $local_size -ne $url_size ] || [ $local_timestamp -ne $url_timestamp ];then 
-            echo "Size or date don't match. Download the file"
+        if md5sum "$__file" "$temp" | md5sum --check --status; then
+            echo No update needed.
+        else 
+            echo "Checksums don't match. Download the file"
             echo "Downloading from link: $UPDATE_LINK to location: $__file"
-            $WGET "$UPDATE_LINK" -O $__file
-         fi
+            mv "$temp" "$__file"
+            #ensure execution permissions
+            chmod 755 "$__file"
+        fi
     fi
 }
 
@@ -668,6 +675,7 @@ check_environment
 
 case $action in
     update)
+        user_is_root || { echo "User must be root to $action puckman" && exit 1 ;}
         update
         ;;
     remove|uninstall|delete)
@@ -692,4 +700,6 @@ case $action in
         exit 1
         ;;
 esac
+
 exit 0
+
