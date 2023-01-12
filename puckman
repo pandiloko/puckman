@@ -242,7 +242,7 @@ get_download_link(){
     candidates_count=$(wc -l $candidates_temp | awk '{print $1}')
     [ $candidates_count -eq 1 ] && cat $candidates_temp && return 0
     # sometimes there are releases for other (heretic) OSes. We select the one and only:
-    cat $release_temp |  grep -v 'musl\|deb$\|rpm$\|asc$' | grep $arch_uname | grep linux > $candidates_temp
+    cat $release_temp |  grep -v 'musl\|deb$\|rpm$\|asc$' | grep $arch_uname | grep -i linux > $candidates_temp
     candidates_count=$(wc -l $candidates_temp | awk '{print $1}')
     [ $candidates_count -eq 1 ] && cat $candidates_temp && return 0
 
@@ -250,7 +250,7 @@ get_download_link(){
     candidates_count=$(wc -l $candidates_temp | awk '{print $1}')
     [ $candidates_count -eq 1 ] && cat $candidates_temp && return 0
     # sometimes there are releases for other (heretic) OSes. We select the one and only:
-    cat $release_temp |  grep -v 'musl\|deb$\|rpm$\|asc$' | grep $arch_other | grep linux > $candidates_temp
+    cat $release_temp |  grep -v 'musl\|deb$\|rpm$\|asc$' | grep $arch_other | grep -i linux > $candidates_temp
     candidates_count=$(wc -l $candidates_temp | awk '{print $1}')
     [ $candidates_count -eq 1 ] && cat $candidates_temp && return 0
 
@@ -260,7 +260,7 @@ get_download_link(){
     candidates_count=$(wc -l $candidates_temp | awk '{print $1}')
     [ $candidates_count -eq 1 ] && cat $candidates_temp && return 0
     # sometimes there are releases for other (heretic) OSes. We select the one and only:
-    cat $release_temp |  grep -v 'musl\|deb$\|rpm$\|asc$' | grep $bits | grep linux > $candidates_temp
+    cat $release_temp |  grep -v 'musl\|deb$\|rpm$\|asc$' | grep $bits | grep -i linux > $candidates_temp
     candidates_count=$(wc -l $candidates_temp | awk '{print $1}')
     [ $candidates_count -eq 1 ] && cat $candidates_temp && return 0
 
@@ -342,7 +342,7 @@ install(){
     download_link=$(get_download_link)
 
     if [[ -z "$download_link" ]]; then
-        echo "package $package not found" && return 1
+        echo "package $package: no candidate found" && return 1
         github_release $link
     fi
     
@@ -628,6 +628,8 @@ Actions:
 
     <package name>
             (no action specified) search and install if unique
+    update
+            updates puckman downloading the latest code from Github
 
 "
 
