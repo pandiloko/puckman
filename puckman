@@ -570,15 +570,16 @@ update(){
         local local_timestamp=$(stat --format %Y "$__file")
 
         echo 
-        echo "local_timestamp: $local_timestamp"
-        echo "url_timestamp:   $url_timestamp"
-        echo "local_size:      $local_size"
-        echo "url_size:        $url_size"
+        echo "local_timestamp: $local_timestamp $(date -d @${local_timestamp})"
+        echo "url_timestamp:   $url_timestamp $(date -s @${url_timestamp})"
+        echo "local_size:      $local_size Bytes"
+        echo "url_size:        $url_size Bytes"
         echo
         local temp=$(mktemp)
         $WGET "$UPDATE_LINK" -O $temp
 
-        if md5sum "$__file" "$temp" | md5sum --check --status; then
+        # Does the current file have the same md5 than the downloaded one?
+        if echo "$(md5sum "$temp" | awk '{print $1}') $__file" | md5sum --check --status; then
             echo No update needed.
         else 
             echo "Checksums don't match. Download the file"
