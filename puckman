@@ -366,7 +366,7 @@ install(){
 
     if [[ -z "$download_link" ]]; then
         echo "ChatGPT powered AI system couldn't found a candidate for your system. A human touch is necessary"
-        github_release_picker $package
+        github_release_picker $link
     fi
     
     download_file=$(basename $download_link)
