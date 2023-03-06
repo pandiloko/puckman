@@ -614,7 +614,7 @@ update(){
         echo "url_size:        $url_size Bytes"
         echo
         local temp=$(mktemp)
-        $WGET "$UPDATE_LINK" -O $temp
+        $WGET "$UPDATE_LINK?$(date +%s)" -O $temp
 
         # Does the current file have the same md5 than the downloaded one?
         if echo "$(md5sum "$temp" | awk '{print $1}') $__file" | md5sum --check --status; then
@@ -647,7 +647,7 @@ __root="$(cd "$(dirname "${__dir}")" && pwd)"
 check_environment
 
 usage="
-puckman (v2.3)
+puckman (v2.4)
 =======
 Installs software from github releases
 
