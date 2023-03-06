@@ -547,11 +547,11 @@ check_environment (){
     TTY=$(tty)
     local dependencies_exist=true
     #TODO: refactor: loop through an array of necessary binaries
-    if ! type file &>dev/null; then
+    if ! type file &> /dev/null; then
         echo "Please install file: e.g. apt install file"
         dependencies_exist=false
     fi
-    if ! type jq &>dev/null; then
+    if ! type jq &>/dev/null; then
         echo "Please install jq: e.g. apt install jq"
         dependencies_exist=false
     fi
@@ -647,7 +647,7 @@ __root="$(cd "$(dirname "${__dir}")" && pwd)"
 check_environment
 
 usage="
-puckman (v2.2)
+puckman (v2.3)
 =======
 Installs software from github releases
 
