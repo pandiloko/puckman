@@ -632,9 +632,10 @@ __root="$(cd "$(dirname "${__dir}")" && pwd)"
 check_environment
 
 usage="
-puckman
+puckman (v2.0)
 =======
 Installs software from github releases
+
 
 Usage:
     puckman <action> [package name]
