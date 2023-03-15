@@ -91,6 +91,8 @@ calculate_levenshtein(){
     echo "Calculating best levenshtein value..."
     while read -r line;do
         current_value=$(levenshtein "$(basename $line)" "$1")
+        [ -z $best_value ] && best_value=$current_value
+        [ -z $best_link ] && best_link=$line
         if [ $current_value -eq 0 ];then
             download_link=$line
             return 0
@@ -354,7 +356,12 @@ install(){
     
     #If we have recorded latest pick, use that to find out the best candidate
     if [ -n "$editors_pick" ];then
-        calculate_levenshtein "$editors_pick"
+        # first try an easy win
+        download_link=$(github_release $link | grep "/$editors_pick\$")
+        # if that doesn't we try the more expensive method
+        if [[ -z "$download_link" ]]; then    
+            calculate_levenshtein "$editors_pick"
+        fi
     fi
     # Otherwise try AI
     if [[ -z "$download_link" ]]; then
