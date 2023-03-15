@@ -500,9 +500,9 @@ install(){
 
 file_age(){
     if [ -e "$1" ] && [ -f "$1" ] && [ -s "$1" ];then
-        echo "$((($(date +%s) - $(date +%s -r "$1")) / 86400)) days"
+        echo -n "$((($(date +%s) - $(date +%s -r "$1")) / 86400)) days"
     else
-        echo "0 days"
+        echo -n "0 days"
     fi
 }
 list(){
@@ -513,6 +513,7 @@ list(){
         if [ ! -f $PUCKMAN_DESCRIPTIONS ] || [ $PUCKMAN_DESCRIPTIONS -ot $n_days_ago ] || [ $(grep -c '^' $PUCKMAN_DESCRIPTIONS) -ne $(grep -c '/' $PUCKMAN_LIST) ];then
             local tmp_file=$(mktemp)
             while read -r project;do
+                #TODO: fix me
                 { echo -en "$project\t"; $WGET  --header "Accept: application/vnd.github+json" "$GITHUB_TOKEN" "https://api.github.com/repos/$project" -qO - | jq .stargazers_count,.description | awk -v d="\t" '{s=(NR==1?s:s d)$0}END{print s}' ;} >> $tmp_file
             done < <(cut -d '#' -f 1 $PUCKMAN_LIST| grep '/')
             mv $tmp_file $PUCKMAN_DESCRIPTIONS
@@ -522,7 +523,7 @@ list(){
     else
         if [ -e $PUCKMAN_DESCRIPTIONS ] && [ -f $PUCKMAN_DESCRIPTIONS ] && [ -s $PUCKMAN_DESCRIPTIONS ] ;then
             if [ $PUCKMAN_DESCRIPTIONS -ot $n_days_ago ];then
-                echo -en "Descriptions list in $PUCKMAN_DESCRIPTIONS is "; file_age "$PUCKMAN_DESCRIPTIONS"; echo" old"
+                echo -en "Descriptions list in $PUCKMAN_DESCRIPTIONS is "; file_age "$PUCKMAN_DESCRIPTIONS"; echo " old"
                 echo "Consider running 'puckman ls' with root to update it"
             fi
         else
