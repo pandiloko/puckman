@@ -262,7 +262,7 @@ get_download_link(){
 
     #try to find deb or rpm
     { type yum &>/dev/null && pkg=rpm ;} || { type apt &>/dev/null && pkg=deb ;}
-    if [ -n $pkg ];then
+    if [ -n "$pkg" ];then
         cat $release_temp | grep "$pkg\$" | grep "$arch_other\|$arch_uname\|$arch_weird" > $candidates_temp
         candidates_count=$(wc -l $candidates_temp | awk '{print $1}')
         [ $candidates_count -eq 1 ] && cat $candidates_temp && return 0
@@ -274,13 +274,13 @@ get_download_link(){
 
     # No package manager. We discard packages and pray to the fortune gods
     # also sometimes there are releases for other (heretic) OSes. We select the one and only:
-    cat $release_temp |  grep -iv 'deb$\|rpm$\|asc$\|exe$\|dmg$\|sig$\|dwin\|macos' | grep -i "$arch_other\|$arch_uname\|$arch_weird\|linux" > $candidates_temp
+    cat $release_temp |  grep -iv 'deb$\|rpm$\|asc$\|exe$\|dmg$\|sig$\|win\|macos\|apple\|darwin' | grep -i "$arch_other\|$arch_uname\|$arch_weird\|linux" > $candidates_temp
     candidates_count=$(wc -l $candidates_temp | awk '{print $1}')
     [ $candidates_count -eq 1 ] && cat $candidates_temp && return 0
 
     # Sometimes there is no architecture for the default architecture
     if [ $arch_uname = "x86_64" ];then
-        cat $release_temp |  grep -iv 'deb$\|rpm$\|asc$\|exe$\|dmg$\|sig$\|win\|macos\|arm\|aarch' | grep -v SHA > $candidates_temp
+        cat $release_temp |  grep -iv 'deb$\|rpm$\|asc$\|exe$\|dmg$\|sig$\|win\|macos\|apple\|darwin\|arm\|aarch' | grep -v SHA > $candidates_temp
         candidates_count=$(wc -l $candidates_temp | awk '{print $1}')
         [ $candidates_count -eq 1 ] && cat $candidates_temp && return 0
     fi
@@ -364,7 +364,7 @@ install(){
     if [[ -z "$download_link" ]]; then
         echo "ChatGPT powered AI system couldn't found a candidate for your system. A human touch is necessary"
         github_release_picker $link
-        if [ $(grep -c $link) -eq 1 ];then
+        if [ $(grep -c $link $PUCKMAN_LIST) -eq 1 ];then
             # if the user handpicked a link, we save that as editors_pick to apply levenshtein on future calls
             local t=$(mktemp)
             grep -v $link $PUCKMAN_LIST > $t
@@ -651,7 +651,7 @@ __root="$(cd "$(dirname "${__dir}")" && pwd)"
 check_environment
 
 usage="
-puckman (v2.7)
+puckman (v2.8)
 =======
 Installs software from github releases
 
