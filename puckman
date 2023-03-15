@@ -444,7 +444,8 @@ install(){
                 echo "It is an archive with only one file (after discarding irrelevant artifacts). Hopefully a binary alone. Trying to install to /usr/local/bin"
                 echo "Candidate file is: $original_name"
                 cd $PUCKMAN_CACHE
-                unzip -n $PUCKMAN_PKG/$download_file
+                # we overwrite in case a wrong package with same file names has been extracted here before
+                unzip -o $PUCKMAN_PKG/$download_file
                 cp "$PUCKMAN_CACHE/$original_name" "$final_name"
                 cd -
                 echo "Installed to $final_name"
@@ -658,7 +659,7 @@ __root="$(cd "$(dirname "${__dir}")" && pwd)"
 check_environment
 
 usage="
-puckman (v2.8)
+puckman (v2.9)
 =======
 Installs software from github releases
 
