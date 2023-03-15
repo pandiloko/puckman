@@ -377,6 +377,8 @@ install(){
             grep -v $link $PUCKMAN_LIST > $t
             echo "$link##$(basename $download_link)" >> $t
             mv $t $PUCKMAN_LIST
+        else
+            echo "$link##$(basename $download_link)" >> $PUCKMAN_LIST
         fi
     fi
     
