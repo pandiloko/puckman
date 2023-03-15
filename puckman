@@ -238,74 +238,45 @@ get_download_link(){
     local candidates_count=0
     github_release $link > $release_temp
 
-    #try to find deb
-    cat $release_temp | grep 'deb$'| grep $arch_other > $candidates_temp
-    candidates_count=$(wc -l $candidates_temp | awk '{print $1}')
-    [ $candidates_count -eq 1 ] && cat $candidates_temp && return 0
-    # sometimes a musl and non-musl release exist. We just pick one
-    [ $candidates_count -gt 1 ] && cat $release_temp | grep 'deb$'| grep $arch_other | grep -v musl > $candidates_temp
+    #try to find deb or rpm
+    { type yum &>/dev/null && pkg=rpm ;} || { type apt &>/dev/null && pkg=deb ;}
+    if [ -n $pkg ];then
+        cat $release_temp | grep "$pkg\$" | grep "$arch_other\|$arch_uname\|$arch_weird" > $candidates_temp
+        candidates_count=$(wc -l $candidates_temp | awk '{print $1}')
+        [ $candidates_count -eq 1 ] && cat $candidates_temp && return 0
+        # Sometimes there is only one package and no arch references
+        cat $release_temp | grep "$pkg\$"  > $candidates_temp
+        candidates_count=$(wc -l $candidates_temp | awk '{print $1}')
+        [ $candidates_count -eq 1 ] && cat $candidates_temp && return 0    
+    fi
+
+    # No package manager. We discard packages and pray to the fortune gods
+    # also sometimes there are releases for other (heretic) OSes. We select the one and only:
+    cat $release_temp |  grep -iv 'deb$\|rpm$\|asc$\|exe$\|dmg$\|sig$\|dwin\|macos' | grep -i "$arch_other\|$arch_uname\|$arch_weird\|linux" > $candidates_temp
     candidates_count=$(wc -l $candidates_temp | awk '{print $1}')
     [ $candidates_count -eq 1 ] && cat $candidates_temp && return 0
 
-    cat $release_temp | grep 'deb$'| grep $arch_uname > $candidates_temp
-    candidates_count=$(wc -l $candidates_temp | awk '{print $1}')
-    [ $candidates_count -eq 1 ] && cat $candidates_temp && return 0
-    # sometimes a musl and non-musl release exist. We just pick one
-    [ $candidates_count -gt 1 ] && cat $release_temp | grep 'deb$'| grep $arch_uname | grep -v musl > $candidates_temp
-    candidates_count=$(wc -l $candidates_temp | awk '{print $1}')
-    [ $candidates_count -eq 1 ] && cat $candidates_temp && return 0    
+    # Sometimes there is no architecture for the default architecture
+    if [ $arch_uname = "x86_64" ];then
+        cat $release_temp |  grep -iv 'deb$\|rpm$\|asc$\|exe$\|dmg$\|sig$\|win\|macos\|arm\|aarch' | grep -v SHA > $candidates_temp
+        candidates_count=$(wc -l $candidates_temp | awk '{print $1}')
+        [ $candidates_count -eq 1 ] && cat $candidates_temp && return 0
+    fi
 
-    # Sometimes there is only one deb file and no arch references
-    cat $release_temp | grep 'deb$'  > $candidates_temp
-    candidates_count=$(wc -l $candidates_temp | awk '{print $1}')
-    [ $candidates_count -eq 1 ] && cat $candidates_temp && return 0    
-
-    # if no deb exists, we discard rpm and pray to the fortune gods
-    cat $release_temp |  grep -v 'musl\|deb$\|rpm$\|asc$' | grep $arch_uname > $candidates_temp
-    candidates_count=$(wc -l $candidates_temp | awk '{print $1}')
-    [ $candidates_count -eq 1 ] && cat $candidates_temp && return 0
-    # sometimes there are releases for other (heretic) OSes. We select the one and only:
-    cat $release_temp |  grep -v 'musl\|deb$\|rpm$\|asc$' | grep $arch_uname | grep -i linux > $candidates_temp
-    candidates_count=$(wc -l $candidates_temp | awk '{print $1}')
-    [ $candidates_count -eq 1 ] && cat $candidates_temp && return 0
-
-    cat $release_temp |  grep -v 'musl\|deb$\|rpm$\|asc$' | grep $arch_other > $candidates_temp
-    candidates_count=$(wc -l $candidates_temp | awk '{print $1}')
-    [ $candidates_count -eq 1 ] && cat $candidates_temp && return 0
-    # sometimes there are releases for other (heretic) OSes. We select the one and only:
-    cat $release_temp |  grep -v 'musl\|deb$\|rpm$\|asc$' | grep $arch_other | grep -i linux > $candidates_temp
-    candidates_count=$(wc -l $candidates_temp | awk '{print $1}')
-    [ $candidates_count -eq 1 ] && cat $candidates_temp && return 0
-
-    # if no deb exists, we discard rpm and pray to the fortune gods
-    
-    cat $release_temp |  grep -v 'musl\|deb$\|rpm$\|asc$' | grep $bits > $candidates_temp
-    candidates_count=$(wc -l $candidates_temp | awk '{print $1}')
-    [ $candidates_count -eq 1 ] && cat $candidates_temp && return 0
-    # sometimes there are releases for other (heretic) OSes. We select the one and only:
-    cat $release_temp |  grep -v 'musl\|deb$\|rpm$\|asc$' | grep $bits | grep -i linux > $candidates_temp
-    candidates_count=$(wc -l $candidates_temp | awk '{print $1}')
-    [ $candidates_count -eq 1 ] && cat $candidates_temp && return 0
-
-    # some sadistic creatures release with intel as an arch name
-    cat $release_temp |  grep -v 'musl\|deb$\|rpm$\|asc$' | grep $arch_weird > $candidates_temp
-    candidates_count=$(wc -l $candidates_temp | awk '{print $1}')
-    [ $candidates_count -eq 1 ] && cat $candidates_temp && return 0
-    cat $release_temp |  grep -v 'musl\|deb$\|rpm$\|asc$' | grep $arch_weird | grep $bits > $candidates_temp
-    candidates_count=$(wc -l $candidates_temp | awk '{print $1}')
-    [ $candidates_count -eq 1 ] && cat $candidates_temp && return 0
-
-    # sometimes even linux and 64bit is all you need
-    cat $release_temp |  grep -v 'musl\|deb$\|rpm$\|asc$' | grep linux | grep $bits > $candidates_temp
-    candidates_count=$(wc -l $candidates_temp | awk '{print $1}')
-    [ $candidates_count -eq 1 ] && cat $candidates_temp && return 0
         
+    # Sometimes just a binary with the program name is provided
+    cat $release_temp |  grep "$(basename $link)\$"   > $candidates_temp
+    candidates_count=$(wc -l $candidates_temp | awk '{print $1}')
+    [ $candidates_count -eq 1 ] && cat $candidates_temp && return 0
+
+
+
     # If everything failed, try regex
     if [ -n "$regex" ];then
         cat $release_temp | grep -m 1 -E "$regex" | tr -d '"'    
     fi
-
 }
+
 install(){
     local link=""
     local regex=""
@@ -469,8 +440,8 @@ install(){
             #sudo cp $PUCKMAN_PKG/$final_name /usr/local/bin/${final_name%%_*}
             ;;
         *)
-            if file $PUCKMAN_PKG/$download_file | grep ELF &> /dev/null ;then
-                echo it is a single binary
+            if file $PUCKMAN_PKG/$download_file | grep 'ELF\|shell script\|script executable' &> /dev/null ;then
+                echo it is a single binary or script
                 echo installing to /usr/local/bin/$(basename $link)
                 cp $PUCKMAN_PKG/$download_file /usr/local/bin/$(basename $link)
                 chmod +x /usr/local/bin/$(basename $link)
@@ -647,7 +618,7 @@ __root="$(cd "$(dirname "${__dir}")" && pwd)"
 check_environment
 
 usage="
-puckman (v2.5)
+puckman (v2.6)
 =======
 Installs software from github releases
 
