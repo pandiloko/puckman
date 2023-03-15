@@ -83,6 +83,28 @@ levenshtein() {
 # done < "$1"
 }
 
+
+calculate_levenshtein(){
+    local best_value
+    local best_link
+    local current_value
+    echo "Calculating best levenshtein value..."
+    while read -r line;do
+        current_value=$(levenshtein "$(basename $line)" "$1")
+        if [ $current_value -eq 0 ];then
+            download_link=$line
+            return 0
+        elif [ $current_value -lt $best_value ];then
+            best_link=$line
+            best_value=$current_value
+        fi            
+    done < <( github_release $link )
+    download_link=$best_link
+    echo "best value: $best_value"
+    echo "best link: $best_link"
+}
+
+
 search (){
     #expects search term in global variable $package and modifies it to reflect the result
     local search_results
@@ -284,10 +306,7 @@ install(){
     local download_file=""
     local original_name=""
     local final_name=""
-    local count=0
-    local temp=$(mktemp)
-    local temp_dir=$(mktemp -d)
-    
+    local count=0    
     
     local matches=$(grep -c "$package" "$PUCKMAN_LIST")
     if [ -z $matches ] || [ $matches -eq 0 ];then
@@ -312,7 +331,7 @@ install(){
         return 1
     elif [ $matches -eq 1 ];then
         # Read regex and link and check if not empty
-        IFS="#" read -r link regex < <(grep "$package" "$PUCKMAN_LIST")
+        IFS="#" read -r link regex editors_pick < <(grep "$package" "$PUCKMAN_LIST")
 
         if [[ -z "$regex" ]]; then
             echo "No regex defined: $link"
@@ -332,12 +351,26 @@ install(){
         sudo $regex install --upgrade $link
         return $?
     fi
-
-    download_link=$(get_download_link)
-
+    
+    #If we have recorded latest pick, use that to find out the best candidate
+    if [ -n "$editors_pick" ];then
+        calculate_levenshtein "$editors_pick"
+    fi
+    # Otherwise try AI
+    if [[ -z "$download_link" ]]; then
+        download_link=$(get_download_link)
+    fi
+    # Finally show the menu to pick manually
     if [[ -z "$download_link" ]]; then
         echo "ChatGPT powered AI system couldn't found a candidate for your system. A human touch is necessary"
         github_release_picker $link
+        if [ $(grep -c $link) -eq 1 ];then
+            # if the user handpicked a link, we save that as editors_pick to apply levenshtein on future calls
+            local t=$(mktemp)
+            grep -v $link $PUCKMAN_LIST > $t
+            echo "$link##$(basename $download_link)" >> $t
+            mv $t $PUCKMAN_LIST
+        fi
     fi
     
     download_file=$(basename $download_link)
@@ -618,7 +651,7 @@ __root="$(cd "$(dirname "${__dir}")" && pwd)"
 check_environment
 
 usage="
-puckman (v2.6)
+puckman (v2.7)
 =======
 Installs software from github releases
 
