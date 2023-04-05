@@ -276,13 +276,13 @@ get_download_link(){
 
     # No package manager. We discard packages and pray to the fortune gods
     # also sometimes there are releases for other (heretic) OSes. We select the one and only:
-    cat $release_temp |  grep -iv 'deb$\|rpm$\|asc$\|exe$\|dmg$\|sig$\|win\|macos\|apple\|darwin' | grep -i "$arch_other\|$arch_uname\|$arch_weird\|linux" > $candidates_temp
+    cat $release_temp |  grep -iv 'deb$\|rpm$\|asc$\|exe$\|dmg$\|sig$\|windows\|macos\|apple\|darwin' | grep -i "$arch_other\|$arch_uname\|$arch_weird" > $candidates_temp
     candidates_count=$(wc -l $candidates_temp | awk '{print $1}')
     [ $candidates_count -eq 1 ] && cat $candidates_temp && return 0
 
     # Sometimes there is no architecture for the default architecture
     if [ $arch_uname = "x86_64" ];then
-        cat $release_temp |  grep -iv 'deb$\|rpm$\|asc$\|exe$\|dmg$\|sig$\|win\|macos\|apple\|darwin\|arm\|aarch' | grep -v SHA > $candidates_temp
+        cat $release_temp |  grep -iv 'deb$\|rpm$\|asc$\|exe$\|dmg$\|sig$\|windows\|macos\|apple\|darwin\|arm\|aarch' | grep -v SHA > $candidates_temp
         candidates_count=$(wc -l $candidates_temp | awk '{print $1}')
         [ $candidates_count -eq 1 ] && cat $candidates_temp && return 0
     fi
@@ -514,7 +514,7 @@ list(){
             local tmp_file=$(mktemp)
             while read -r project;do
                 #TODO: fix me
-                { echo -en "$project\t"; $WGET  --header "Accept: application/vnd.github+json" "$GITHUB_TOKEN" "https://api.github.com/repos/$project" -qO - | jq .stargazers_count,.description | awk -v d="\t" '{s=(NR==1?s:s d)$0}END{print s}' ;} >> $tmp_file
+                { echo -en "$project\t"; $WGET  --header "Accept: application/vnd.github+json" "${GITHUB_TOKEN[@]}" "https://api.github.com/repos/$project" -qO - | jq .stargazers_count,.description | awk -v d="\t" '{s=(NR==1?s:s d)$0}END{print s}' ;} >> $tmp_file
             done < <(cut -d '#' -f 1 $PUCKMAN_LIST| grep '/')
             mv $tmp_file $PUCKMAN_DESCRIPTIONS
         fi
