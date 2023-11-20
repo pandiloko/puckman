@@ -475,12 +475,12 @@ install(){
             ;;
         *.bz2)
             echo it is a non-tar bz2. Hopefully a binary alone
-            #local final_name=${download_file%.bz2}
             bunzip2 $PUCKMAN_PKG/$download_file
             chmod +x $PUCKMAN_PKG/$original_name
-            echo "Copying to /usr/local/bin/"$(expr match "$final_name" '\([a-z]\+\)')
-            sudo cp $PUCKMAN_PKG/$final_name "$final_name"
-            #sudo cp $PUCKMAN_PKG/$final_name /usr/local/bin/${final_name%%_*}
+            local final_name=/usr/local/bin/$(expr match "$original_name" '\([a-z]\+\)')
+            #local final_name=${download_file%.bz2}
+            echo "Copying to $final_name"
+            cp $PUCKMAN_PKG/$original_name "$final_name"
             ;;
         *)
             if file $PUCKMAN_PKG/$download_file | grep 'ELF\|shell script\|script executable' &> /dev/null ;then
