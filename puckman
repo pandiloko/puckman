@@ -83,14 +83,29 @@ levenshtein() {
 # done < "$1"
 }
 
+levenshtein_pylev(){
+py_script="
+import pylev
+distance = pylev.levenshtein('$1', '$2')
+print (distance)
+"
+python3 -c "$py_script" $1 $2
+}
 
 calculate_levenshtein(){
     local best_value
     local best_link
     local current_value
     echo "Calculating best levenshtein value..."
+    if python3 -c "import pylev" 2> /dev/null;then
+	echo "Using python3 pylev implementation"
+	LEVENSHTEIN_CMD=levenshtein_pylev
+    else
+        echo "Consider installing python3-pylev for a faster Levenshtein algorithm implementation"
+	LEVENSHTEIN_CMD=levenshtein
+    fi
     while read -r line;do
-        current_value=$(levenshtein "$(basename $line)" "$1")
+        current_value=$($LEVENSHTEIN_CMD "$(basename $line)" "$1")
         [ -z $best_value ] && best_value=$current_value
         [ -z $best_link ] && best_link=$line
         if [ $current_value -eq 0 ];then
@@ -105,6 +120,8 @@ calculate_levenshtein(){
     echo "best value: $best_value"
     echo "best link: $best_link"
 }
+
+
 
 
 search (){
