@@ -212,7 +212,7 @@ archive_count(){
     #output count of files in archive 
     # if count=1 also orig name and final name
     # files to ignore
-    release_artifacts_to_ignore='.*txt$\|LICENSE\|.*md$\|README$\|NEWS$\|CHANGELOG$\|\/$'
+    release_artifacts_to_ignore='.*svg\|.*desktop\|.*\.1\|.*txt$\|LICENSE.*\|.*md$\|README$\|NEWS$\|CHANGELOG.*\|\/$'
     local count=0
     local temp=$(mktemp)
     local original_name="-"
