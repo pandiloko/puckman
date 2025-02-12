@@ -428,7 +428,7 @@ install(){
     if [ $download -eq 0 ];then 
         echo Downloading...
         [ -n "$regex" ] && find $PUCKMAN_PKG -type f -iregex '.*'"$regex" -delete
-        cd  $PUCKMAN_PKG && wget "$download_link" && cd -
+        cd  $PUCKMAN_PKG && $WGET "$download_link" && cd -
     fi
 
     # - actually install (basename extension, tar, deb etc)
@@ -705,7 +705,7 @@ Actions:
 
 "
 
-WGET="wget -T 5 --tries=1"
+WGET="wget -T 5 --tries=1 --backups=2"
 GITHUB_TOKEN=""
 UPDATE_LINK="https://raw.githubusercontent.com/pandiloko/puckman/master/puckman"
 
