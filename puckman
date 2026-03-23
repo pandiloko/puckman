@@ -274,25 +274,108 @@ _try_dl_unique() {
     _gd_emit_unique_and_exit "$rt" "$ct"
 }
 
-get_download_link(){
-    #Complex AI algorithm to determine what the fuck the user wants to install
+# When several .deb assets match the CPU (e.g. gnu vs musl triplet), prefer glibc (Debian default).
+_try_dl_unique_deb_abi() {
+    local rt="$1" ct="$2" n
+    n=$(wc -l < "$ct" | tr -d ' ')
+    [ "$n" -eq 1 ] && _gd_emit_unique_and_exit "$rt" "$ct" && return 0
+    [ "$n" -eq 0 ] && return 1
 
-    local bits
-    bits=$(getconf LONG_BIT) # just 32 or 64
-    local arch_uname
-    arch_uname=$(uname -m)  #prints values such as x86_64, i686, arm, or aarch64
-    # also only for debuntu: dpkg --print-architecture
-    local arch_other=""
-    local arch_weird=""
+    # 1) Prefer explicit glibc triplet builds.
+    grep -F 'unknown-linux-gnu' "$ct" > "${ct}._abi" 2>/dev/null || : > "${ct}._abi"
+    n=$(wc -l < "${ct}._abi" | tr -d ' ')
+    if [ "$n" -eq 1 ]; then
+        rm -f "$ct"
+        mv "${ct}._abi" "$ct"
+        _gd_emit_unique_and_exit "$rt" "$ct"
+        return 0
+    fi
+    rm -f "${ct}._abi"
+
+    # 2) Prefer non-musl variants when both are present.
+    grep -iv 'musl' "$ct" > "${ct}._abi" 2>/dev/null || : > "${ct}._abi"
+    n=$(wc -l < "${ct}._abi" | tr -d ' ')
+    if [ "$n" -eq 1 ]; then
+        rm -f "$ct"
+        mv "${ct}._abi" "$ct"
+        _gd_emit_unique_and_exit "$rt" "$ct"
+        return 0
+    fi
+    if [ "$n" -gt 1 ]; then
+        rm -f "$ct"
+        mv "${ct}._abi" "$ct"
+    else
+        rm -f "${ct}._abi"
+    fi
+
+    # 3) Prefer the plain .deb over *_xz.deb when both exist.
+    grep -iv '_xz\.deb$' "$ct" > "${ct}._abi" 2>/dev/null || : > "${ct}._abi"
+    n=$(wc -l < "${ct}._abi" | tr -d ' ')
+    if [ "$n" -eq 1 ]; then
+        rm -f "$ct"
+        mv "${ct}._abi" "$ct"
+        _gd_emit_unique_and_exit "$rt" "$ct"
+        return 0
+    fi
+    rm -f "${ct}._abi"
+
+    # 4) If only musl remains uniquely identifiable, accept it.
+    grep -F 'unknown-linux-musl' "$ct" > "${ct}._abi" 2>/dev/null || : > "${ct}._abi"
+    n=$(wc -l < "${ct}._abi" | tr -d ' ')
+    if [ "$n" -eq 1 ]; then
+        rm -f "$ct"
+        mv "${ct}._abi" "$ct"
+        _gd_emit_unique_and_exit "$rt" "$ct"
+        return 0
+    fi
+    rm -f "${ct}._abi"
+    return 1
+}
+
+# Release lines to drop when matching generic/binary assets (checksums, other OS, etc.).
+_gd_exclude_foreign_and_meta='\.(asc|sig|gpg|sha256|sha512|sha1|md5|minisig)$|[-.]sha[0-9]+|checksum|SUMS$|sbom|\.pem$|\.crt$|\.msix$|\.msi$|\.exe$|\.dmg$|\.pkg$|\.deb$|\.rpm$|windows|win32|win64|w64|macos|darwin|apple|osx|android'
+
+get_download_link(){
+    # Heuristic choice of a release asset URL for this machine (ordered tries).
+
+    local arch_uname arch_deb arch_rpm arch_grep
+    arch_uname=$(uname -m)
+    arch_deb=""
+    arch_rpm=""
+    arch_grep=""
+
+    if command -v dpkg >/dev/null 2>&1; then
+        arch_deb=$(dpkg --print-architecture 2>/dev/null || true)
+    fi
+
     case $arch_uname in
-        i386|i686) arch_other="386" ;;
-        x86_64)    arch_other="amd64" ;;
-        arm)       arch_other="arm" ;;
-    esac
-    case $arch_uname in
-        i386|i686) arch_weird="intel" ;;
-        x86_64)    arch_weird="intel" ;;
-        arm)       arch_weird="arm" ;;
+        i386|i686)
+            arch_rpm="i386"
+            arch_grep='i386|i686|386'
+            ;;
+        x86_64)
+            arch_rpm="x86_64"
+            arch_grep='x86_64|amd64|x64'
+            ;;
+        aarch64|arm64)
+            arch_rpm="aarch64"
+            arch_grep='aarch64|arm64|armv8'
+            ;;
+        armv7l|armv6l)
+            arch_rpm="armv7hl"
+            arch_grep='armv7|armhf|armv6|armel'
+            ;;
+        arm*)
+            arch_rpm="arm"
+            arch_grep='arm'
+            ;;
+        riscv64)
+            arch_rpm="riscv64"
+            arch_grep='riscv64|riscv'
+            ;;
+        *)
+            arch_grep="$arch_uname"
+            ;;
     esac
 
     local release_temp candidates_temp pkg
@@ -301,34 +384,82 @@ get_download_link(){
     trap 'rm -f "$release_temp" "$candidates_temp"' EXIT
     github_release "$link" > "$release_temp"
 
-    #try to find deb or rpm
-    { type yum &>/dev/null && pkg=rpm ;} || { type apt &>/dev/null && pkg=deb ;}
-    if [ -n "$pkg" ];then
-        grep "$pkg\$" "$release_temp" | grep "$arch_other\|$arch_uname\|$arch_weird" > "$candidates_temp"
-        _try_dl_unique "$release_temp" "$candidates_temp" && return 0
-        # Sometimes there is only one package and no arch references
-        grep "$pkg\$" "$release_temp" > "$candidates_temp"
+    # Prefer RPM tooling when present (matches older puckman behavior on mixed setups).
+    pkg=""
+    if type dnf &>/dev/null || type yum &>/dev/null; then
+        pkg=rpm
+    elif type apt-get &>/dev/null || type apt &>/dev/null; then
+        pkg=deb
+    fi
+
+    # .deb: Debian *_amd64.deb naming, then dpkg arch substring, then triplet-style names
+    # (Rust/cross builds often use x86_64/aarch64 in the filename instead of amd64/arm64).
+    if [ "$pkg" = deb ]; then
+        local deb_triplet_grep=""
+        case $arch_deb in
+            amd64) deb_triplet_grep='x86_64|amd64' ;;
+            arm64) deb_triplet_grep='aarch64|arm64' ;;
+            i386) deb_triplet_grep='i386|i686|386' ;;
+            armhf) deb_triplet_grep='armhf|armv7' ;;
+            armel) deb_triplet_grep='armel' ;;
+            riscv64) deb_triplet_grep='riscv64|riscv' ;;
+            "") ;;
+            *) deb_triplet_grep="$arch_deb" ;;
+        esac
+
+        if [ -n "$arch_deb" ]; then
+            grep -E '\.deb$' "$release_temp" | grep -E "_${arch_deb}\\.deb\$" > "$candidates_temp"
+            _try_dl_unique_deb_abi "$release_temp" "$candidates_temp" && return 0
+            grep -E '\.deb$' "$release_temp" | grep -F "$arch_deb" > "$candidates_temp"
+            _try_dl_unique_deb_abi "$release_temp" "$candidates_temp" && return 0
+        fi
+        if [ -n "$deb_triplet_grep" ]; then
+            grep -E '\.deb$' "$release_temp" | grep -Ei "$deb_triplet_grep" > "$candidates_temp"
+            _try_dl_unique_deb_abi "$release_temp" "$candidates_temp" && return 0
+        fi
+        if [ -n "$arch_grep" ]; then
+            grep -E '\.deb$' "$release_temp" | grep -Ei "$arch_grep" > "$candidates_temp"
+            _try_dl_unique_deb_abi "$release_temp" "$candidates_temp" && return 0
+        fi
+        grep -E '\.deb$' "$release_temp" > "$candidates_temp"
         _try_dl_unique "$release_temp" "$candidates_temp" && return 0
     fi
 
-    # No package manager. We discard packages and pray to the fortune gods
-    # also sometimes there are releases for other (heretic) OSes. We select the one and only:
-    grep -iv 'deb$\|rpm$\|asc$\|exe$\|dmg$\|sig$\|windows\|macos\|apple\|darwin' "$release_temp" | grep -i "$arch_other\|$arch_uname\|$arch_weird" > "$candidates_temp"
-    _try_dl_unique "$release_temp" "$candidates_temp" && return 0
-
-    # Sometimes there is no architecture for the default architecture
-    if [ "$arch_uname" = "x86_64" ];then
-        grep -iv 'deb$\|rpm$\|asc$\|exe$\|dmg$\|sig$\|windows\|macos\|apple\|darwin\|arm\|aarch' "$release_temp" | grep -v SHA > "$candidates_temp"
+    # .rpm: match filename containing RPM arch, else any single .rpm.
+    if [ "$pkg" = rpm ]; then
+        if [ -n "$arch_rpm" ]; then
+            grep -E '\.rpm$' "$release_temp" | grep -Fi "$arch_rpm" > "$candidates_temp"
+            _try_dl_unique "$release_temp" "$candidates_temp" && return 0
+        fi
+        grep -E '\.rpm$' "$release_temp" > "$candidates_temp"
         _try_dl_unique "$release_temp" "$candidates_temp" && return 0
     fi
 
-    # Sometimes just a binary with the program name is provided
-    grep "$(basename "$link")\$" "$release_temp" > "$candidates_temp"
+    # Portable archives / binaries: require arch hint in the URL/filename when possible.
+    if [ -n "$arch_grep" ]; then
+        grep -ivE "$_gd_exclude_foreign_and_meta" "$release_temp" | grep -Ei 'linux|gnu|unknown-linux' | grep -Ei "$arch_grep" > "$candidates_temp"
+        _try_dl_unique "$release_temp" "$candidates_temp" && return 0
+        grep -ivE "$_gd_exclude_foreign_and_meta" "$release_temp" | grep -Ei "$arch_grep" > "$candidates_temp"
+        _try_dl_unique "$release_temp" "$candidates_temp" && return 0
+    fi
+
+    # x86_64: allow "generic" Linux build with no arch token in the name.
+    if [ "$arch_uname" = "x86_64" ]; then
+        grep -ivE "$_gd_exclude_foreign_and_meta|arm|aarch|riscv|i386|i686|386" "$release_temp" | grep -ivE 'SHA|source|src\.|\.src\.' > "$candidates_temp"
+        _try_dl_unique "$release_temp" "$candidates_temp" && return 0
+    fi
+
+    # Single remaining asset after stripping obvious non-installers.
+    grep -ivE "$_gd_exclude_foreign_and_meta" "$release_temp" > "$candidates_temp"
     _try_dl_unique "$release_temp" "$candidates_temp" && return 0
 
-    # If everything failed, try regex
+    # Exact basename match (repo name as filename).
+    grep -F "$(basename "$link")" "$release_temp" | grep -ivE '\.(asc|sig|gpg|sha256|sha512|sha1)$' > "$candidates_temp"
+    _try_dl_unique "$release_temp" "$candidates_temp" && return 0
+
+    # packages.txt regex (if set).
     local out=""
-    if [ -n "$regex" ];then
+    if [ -n "$regex" ]; then
         out=$(grep -m 1 -E "$regex" "$release_temp" | tr -d '"')
     fi
     trap - EXIT
@@ -568,13 +699,11 @@ install(){
             calculate_levenshtein "$editors_pick"
         fi
     fi
-    # Otherwise try AI
     if [[ -z "$download_link" ]]; then
         download_link=$(get_download_link)
     fi
-    # Finally show the menu to pick manually
     if [[ -z "$download_link" ]]; then
-        echo "ChatGPT powered AI system couldn't found a candidate for your system. A human touch is necessary"
+        echo "Heuristics did not find a unique release asset for this system; pick one manually."
         github_release_picker "$link"
         local pick_line="${link}##$(basename "$download_link")"
         if [ "$(awk -F'#' -v l="$link" '$1==l{c++} END{print c+0}' "$PUCKMAN_LIST")" -eq 1 ];then
@@ -774,12 +903,26 @@ check_environment (){
     TTY=$(tty)
     local dependencies_exist=true
     local dep
-    for dep in file jq wget python3; do
+    for dep in file jq wget python3 sudo column unzip bunzip2; do
         if ! type "$dep" &>/dev/null; then
-            echo "Please install $dep: e.g. apt install $dep"
+            case "$dep" in
+                bunzip2)
+                    echo "Please install bzip2 (provides bunzip2): e.g. apt install bzip2"
+                    ;;
+                column)
+                    echo "Please install column: e.g. apt install bsdextrautils or bsdmainutils"
+                    ;;
+                *)
+                    echo "Please install $dep: e.g. apt install $dep"
+                    ;;
+            esac
             dependencies_exist=false
         fi
     done
+    if ! { date -d @0 +%s &>/dev/null && stat --format %s "${BASH_SOURCE[0]}" &>/dev/null; }; then
+        echo "Please install GNU coreutils: e.g. apt install coreutils"
+        dependencies_exist=false
+    fi
     if [ "$dependencies_exist" = false ];then
         echo "Install dependencies before continuing"
         exit 1
@@ -872,7 +1015,7 @@ __base="$(basename ${__file} .sh)"
 __root="$(cd "$(dirname "${__dir}")" && pwd)"
 
 usage="
-puckman (v3.0)
+puckman (v3.1)
 =======
 Installs software from github releases
 
@@ -888,7 +1031,7 @@ Actions:
             duh!
 
     uninstall <package name>   (aliases: remove, delete)
-            remove installs recorded since v3.0 (see PUCKMAN_STATE)
+            remove installs recorded since v3.1 (see PUCKMAN_STATE)
 
     search <search term>
             searches repositories in github. It presents a limited set of the
