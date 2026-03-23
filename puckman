@@ -5,7 +5,7 @@ get_github_token(){
         "$HOME/Sync/$USER/.githubtoken"
         "$HOME/.githubtoken"
         "/etc/githubtoken"
-    )    
+    )
     for l in "${locations[@]}"; do
         if [ -f "$l" ];then
             GITHUB_TOKEN=("--header" "Authorization: token $(cat "$l")")
@@ -17,7 +17,7 @@ get_github_token(){
 
 get_env_vars(){
     #try default locations
-    local locations=( 
+    local locations=(
         "$HOME/Sync/puckman"
         "$HOME/.config/puckman"
         "/etc/puckman"
@@ -43,6 +43,8 @@ get_env_vars(){
     export PUCKMAN_DESCRIPTIONS
     [ -z "$PUCKMAN_LIST" ] && PUCKMAN_LIST="/etc/puckman/packages.txt"
     export PUCKMAN_LIST
+    [ -z "$PUCKMAN_STATE" ] && PUCKMAN_STATE=/var/lib/puckman
+    export PUCKMAN_STATE
 }
 
 levenshtein() {
@@ -114,7 +116,7 @@ calculate_levenshtein(){
         elif [ $current_value -lt $best_value ];then
             best_link=$line
             best_value=$current_value
-        fi            
+        fi
     done < <( github_release "$link" )
     download_link=$best_link
     echo "best value: $best_value"
@@ -177,7 +179,7 @@ github_release_picker(){
 }
 
 github_release(){
-    if [ -n "$1" ];then 
+    if [ -n "$1" ];then
         $WGET --header "Accept: application/vnd.github+json" "${GITHUB_TOKEN[@]}" "https://api.github.com/repos/$1/releases/latest" -qO - | jq -r '.assets[].browser_download_url'        
     else
         echo "Please provide github  <user/project> string e.g. borgbackup/borg"; 
@@ -316,6 +318,131 @@ get_download_link(){
     if [ -n "$regex" ];then
         cat $release_temp | grep -m 1 -E "$regex" | tr -d '"'    
     fi
+}
+
+install_manifest_path(){
+    printf '%s/installed/%s.json' "$PUCKMAN_STATE" "$(printf '%s' "$1" | tr '/' '_')"
+}
+
+install_timestamp(){
+    date -Iseconds 2>/dev/null || date
+}
+
+write_manifest_deb(){
+    local link="$1" deb_pkg="$2" artifact="$3"
+    mkdir -p "$PUCKMAN_STATE/installed"
+    jq -n \
+        --arg repo "$link" \
+        --arg kind deb \
+        --arg deb "$deb_pkg" \
+        --arg art "$artifact" \
+        --arg at "$(install_timestamp)" \
+        '{repo: $repo, kind: $kind, deb_package: $deb, artifact: $art, installed_at: $at}' \
+        > "$(install_manifest_path "$link")"
+}
+
+write_manifest_file(){
+    local link="$1" path="$2" artifact="$3"
+    mkdir -p "$PUCKMAN_STATE/installed"
+    jq -n \
+        --arg repo "$link" \
+        --arg kind file \
+        --arg p "$path" \
+        --arg art "$artifact" \
+        --arg at "$(install_timestamp)" \
+        '{repo: $repo, kind: $kind, files: [$p], artifact: $art, installed_at: $at}' \
+        > "$(install_manifest_path "$link")"
+}
+
+write_manifest_pip(){
+    local name="$1" pip_cmd="$2"
+    mkdir -p "$PUCKMAN_STATE/installed"
+    jq -n \
+        --arg repo "$name" \
+        --arg kind pip \
+        --arg cmd "$pip_cmd" \
+        --arg pkg "$name" \
+        --arg at "$(install_timestamp)" \
+        '{repo: $repo, kind: $kind, pip_command: $cmd, pip_package: $pkg, installed_at: $at}' \
+        > "$(install_manifest_path "$name")"
+}
+
+remove_tracked_files(){
+    local mf="$1"
+    local paths
+    mapfile -t paths < <(jq -r '.files[]? | select(. != null and . != "")' "$mf" 2>/dev/null)
+    local p
+    for p in "${paths[@]}"; do
+        case "$p" in
+            /usr/local/bin/*)
+                rm -f -- "$p"
+                ;;
+            *)
+                echo "Refusing to remove path outside /usr/local/bin: $p" >&2
+                return 1
+                ;;
+        esac
+    done
+}
+
+resolve_package_to_link(){
+    local term="$1"
+    local matches
+    matches=$(grep -c -F -- "$term" "$PUCKMAN_LIST" 2>/dev/null || true)
+    [ -z "$matches" ] && matches=0
+    if [ "$matches" -eq 0 ]; then
+        if [[ "$term" == */* ]]; then
+            printf '%s\n' "$term"
+            return 0
+        fi
+        echo "No packages.txt match for '$term' and not owner/repo (use user/project)." >&2
+        return 1
+    elif [ "$matches" -gt 1 ]; then
+        echo "Ambiguous match — refine your term:" >&2
+        grep -F -- "$term" "$PUCKMAN_LIST" >&2
+        return 1
+    else
+        grep -F -- "$term" "$PUCKMAN_LIST" | head -n1 | cut -d'#' -f1
+    fi
+}
+
+uninstall(){
+    local link mf kind
+    link=$(resolve_package_to_link "$package") || return 1
+    mf=$(install_manifest_path "$link")
+    if [ ! -f "$mf" ]; then
+        echo "No install manifest at $mf (nothing recorded for '$link')." >&2
+        return 1
+    fi
+    kind=$(jq -r .kind "$mf")
+    case "$kind" in
+        deb)
+            local deb_pkg
+            deb_pkg=$(jq -r .deb_package "$mf")
+            DEBIAN_FRONTEND=noninteractive apt-get purge -y "$deb_pkg" || return 1
+            ;;
+        file)
+            local fc
+            fc=$(jq '.files | length' "$mf")
+            if [ "${fc:-0}" -lt 1 ]; then
+                echo "Invalid file manifest (no paths)" >&2
+                return 1
+            fi
+            remove_tracked_files "$mf" || return 1
+            ;;
+        pip)
+            local pip_cmd pip_pkg
+            pip_cmd=$(jq -r .pip_command "$mf")
+            pip_pkg=$(jq -r .pip_package "$mf")
+            sudo $pip_cmd uninstall -y "$pip_pkg" || return 1
+            ;;
+        *)
+            echo "Unknown manifest kind: $kind" >&2
+            return 1
+            ;;
+    esac
+    rm -f -- "$mf"
+    echo "Uninstalled $link (manifest removed)."
 }
 
 install(){
@@ -463,14 +590,19 @@ install(){
                     echo ""
                     echo "You can manually install the package with:"
                     echo "sudo dpkg -i $PUCKMAN_PKG/$download_file"
+                    write_manifest_deb "$link" "$package_name" "$download_file"
                     return 0
                 else
                     echo "Version $installed_package_version of package $package_name is already installed. Proceeding to install new version: $package_version"
                 fi
             fi
             echo "INSTALLING DEB PACKAGE: sudo dpkg -i $PUCKMAN_PKG/$download_file"
-            sudo dpkg -i $PUCKMAN_PKG/$download_file
-            sudo apt install -f
+            if sudo dpkg -i "$PUCKMAN_PKG/$download_file"; then
+                sudo apt install -f
+                write_manifest_deb "$link" "$package_name" "$download_file"
+            else
+                return 1
+            fi
             ;;
         *.zip)
             if [ $count -eq 1 ];then
@@ -480,7 +612,13 @@ install(){
                 cd "$PUCKMAN_CACHE" || return 1
                 # we overwrite in case a wrong package with same file names has been extracted here before
                 if unzip -o "$PUCKMAN_PKG/$download_file" && cp "$PUCKMAN_CACHE/$original_name" "$final_name"; then
-                echo "Installed to $final_name"
+                    echo "Installed to $final_name"
+                    write_manifest_file "$link" "$final_name" "$download_file"
+                else
+                    cd - >/dev/null || true
+                    return 1
+                fi
+                cd - >/dev/null || true
             else
                 echo There seems to be more than a single binary. 
                 echo You are on your own. Package has already been downloaded to:
@@ -491,12 +629,17 @@ install(){
             if [ $count -eq 1 ];then
                 echo "It is an archive with only one file (after discarding irrelevant artifacts). Hopefully a binary alone. Trying to install to /usr/local/bin"
                 echo "Candidate file is: $original_name"
-                cd "$PUCKMAN_CACHE"
-                tar -xf $PUCKMAN_PKG/$download_file
-                local final_name=/usr/local/bin/$(expr match "$original_name" '\([a-z]\+\)')
-                cp "$PUCKMAN_CACHE/$original_name" "$final_name"
-                cd -
-                echo "Installed to $final_name"
+                cd "$PUCKMAN_CACHE" || return 1
+                tar -xf "$PUCKMAN_PKG/$download_file"
+                local final_name_tar=/usr/local/bin/$(expr match "$original_name" '\([a-z]\+\)')
+                if cp "$PUCKMAN_CACHE/$original_name" "$final_name_tar"; then
+                    echo "Installed to $final_name_tar"
+                    write_manifest_file "$link" "$final_name_tar" "$download_file"
+                else
+                    cd - >/dev/null || true
+                    return 1
+                fi
+                cd - >/dev/null || true
             else
                 echo There seems to be more than a single binary. 
                 echo You are on your own. Package has already been downloaded to:
@@ -505,19 +648,24 @@ install(){
             ;;
         *.bz2)
             echo it is a non-tar bz2. Hopefully a binary alone
-            bunzip2 $PUCKMAN_PKG/$download_file
-            chmod +x $PUCKMAN_PKG/$original_name
-            local final_name=/usr/local/bin/$(expr match "$original_name" '\([a-z]\+\)')
-            #local final_name=${download_file%.bz2}
-            echo "Copying to $final_name"
-            cp $PUCKMAN_PKG/$original_name "$final_name"
+            bunzip2 -f "$PUCKMAN_PKG/$download_file" || return 1
+            chmod +x "$PUCKMAN_PKG/$original_name"
+            local final_name_bz=/usr/local/bin/$(expr match "$original_name" '\([a-z]\+\)')
+            echo "Copying to $final_name_bz"
+            if cp "$PUCKMAN_PKG/$original_name" "$final_name_bz"; then
+                write_manifest_file "$link" "$final_name_bz" "$download_file"
+            else
+                return 1
+            fi
             ;;
         *)
             if file "$PUCKMAN_PKG/$download_file" | grep 'ELF\|shell script\|script executable' &> /dev/null ;then
                 echo it is a single binary or script
-                echo installing to /usr/local/bin/$(basename $link)
-                cp $PUCKMAN_PKG/$download_file /usr/local/bin/$(basename $link)
-                chmod +x /usr/local/bin/$(basename $link)
+                echo installing to /usr/local/bin/$(basename "$link")
+                local bin_path=/usr/local/bin/$(basename "$link")
+                if cp "$PUCKMAN_PKG/$download_file" "$bin_path" && chmod +x "$bin_path"; then
+                    write_manifest_file "$link" "$bin_path" "$download_file"
+                fi
             fi
             ;;
     esac
@@ -605,6 +753,8 @@ check_environment (){
         exit 1
     fi
 
+    mkdir -p "$PUCKMAN_STATE/installed"
+
     while  read -r line;do
         var_value="${!line}"
         var_path="${var_value%/*.*}"
@@ -689,10 +839,8 @@ __base="$(basename ${__file} .sh)"
 # Parent folder
 __root="$(cd "$(dirname "${__dir}")" && pwd)"
 
-check_environment
-
 usage="
-puckman (v2.9)
+puckman (v3.0)
 =======
 Installs software from github releases
 
@@ -706,6 +854,9 @@ Actions:
 
     install <package name>
             duh!
+
+    uninstall <package name>   (aliases: remove, delete)
+            remove installs recorded since v3.0 (see PUCKMAN_STATE)
 
     search <search term>
             searches repositories in github. It presents a limited set of the
@@ -766,7 +917,9 @@ case $action in
         update
         ;;
     remove|uninstall|delete)
-        echo "Action $action not implemented" && exit 1
+        user_is_root || { echo "User must be root to $action $package" && exit 1 ;}
+        showconfig
+        uninstall
         ;;
     list)
         list
