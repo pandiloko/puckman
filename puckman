@@ -8,7 +8,7 @@ get_github_token(){
     )    
     for l in "${locations[@]}"; do
         if [ -f "$l" ];then
-            GITHUB_TOKEN=("--header" "Authorization: token $(cat $l)")
+            GITHUB_TOKEN=("--header" "Authorization: token $(cat "$l")")
             export GITHUB_TOKEN
             break
         fi
@@ -115,7 +115,7 @@ calculate_levenshtein(){
             best_link=$line
             best_value=$current_value
         fi            
-    done < <( github_release $link )
+    done < <( github_release "$link" )
     download_link=$best_link
     echo "best value: $best_value"
     echo "best link: $best_link"
@@ -277,7 +277,7 @@ get_download_link(){
     local release_temp=$(mktemp)
     local candidates_temp=$(mktemp)
     local candidates_count=0
-    github_release $link > $release_temp
+    github_release "$link" > "$release_temp"
 
     #try to find deb or rpm
     { type yum &>/dev/null && pkg=rpm ;} || { type apt &>/dev/null && pkg=deb ;}
@@ -327,8 +327,10 @@ install(){
     local final_name=""
     local count=0    
     
-    local matches=$(grep -c "$package" "$PUCKMAN_LIST")
-    if [ -z $matches ] || [ $matches -eq 0 ];then
+    local matches
+    matches=$(grep -c -F -- "$package" "$PUCKMAN_LIST" 2>/dev/null || true)
+    [ -z "$matches" ] && matches=0
+    if [ "$matches" -eq 0 ];then
         echo
         echo "No matches for [ $package ]."
         echo
@@ -345,36 +347,44 @@ install(){
         echo "Results:"
         #TODO select
         echo
-        grep "$package" "$PUCKMAN_LIST"
+        grep -F -- "$package" "$PUCKMAN_LIST"
         echo
         return 1
     elif [ $matches -eq 1 ];then
         # Read regex and link and check if not empty
-        IFS="#" read -r link regex editors_pick < <(grep "$package" "$PUCKMAN_LIST")
+        IFS="#" read -r link regex editors_pick < <(grep -F -- "$package" "$PUCKMAN_LIST")
 
         if [[ -z "$regex" ]]; then
             echo "No regex defined: $link"
         fi
     fi
     # At this point we should have at least a desired project
-    # Check if it is already in the config file and add it otherwise
-    if ! grep "$package" "$PUCKMAN_LIST";then
-        echo "Adding package $package to list in $PUCKMAN_LIST"
-        echo "$package" >> $PUCKMAN_LIST
+    # Ensure owner/repo (link) is recorded — not the user's fuzzy search term
+    if ! awk -F'#' -v l="$link" 'BEGIN{f=0} $1==l{f=1} END{exit f?0:1}' "$PUCKMAN_LIST" 2>/dev/null;then
+        echo "Adding package $link to list in $PUCKMAN_LIST"
+        printf '%s\n' "$link" >> "$PUCKMAN_LIST"
     fi
     #If regex is a pip command we don't need to try github at all
     if [[ "$regex" =~ pip|pip2|pip3 ]];then
         #regex should be the appropriate command and link the package name
         echo "installing $link using pip"
         echo "COMMAND: $regex install --upgrade $link"
-        sudo $regex install --upgrade $link
-        return $?
+        if sudo $regex install --upgrade "$link"; then
+            write_manifest_pip "$link" "$regex"
+            return 0
+        fi
+        return 1
     fi
     
     #If we have recorded latest pick, use that to find out the best candidate
     if [ -n "$editors_pick" ];then
         # first try an easy win
-        download_link=$(github_release $link | grep "/$editors_pick\$")
+        download_link=""
+        while IFS= read -r u; do
+            [[ "$u" == */"$editors_pick" ]] || continue
+            download_link=$u
+            break
+        done < <(github_release "$link")
         # if that doesn't we try the more expensive method
         if [[ -z "$download_link" ]]; then    
             calculate_levenshtein "$editors_pick"
@@ -387,19 +397,23 @@ install(){
     # Finally show the menu to pick manually
     if [[ -z "$download_link" ]]; then
         echo "ChatGPT powered AI system couldn't found a candidate for your system. A human touch is necessary"
-        github_release_picker $link
-        if [ $(grep -c $link $PUCKMAN_LIST) -eq 1 ];then
+        github_release_picker "$link"
+        local pick_line="${link}##$(basename "$download_link")"
+        if [ "$(awk -F'#' -v l="$link" '$1==l{c++} END{print c+0}' "$PUCKMAN_LIST")" -eq 1 ];then
             # if the user handpicked a link, we save that as editors_pick to apply levenshtein on future calls
-            local t=$(mktemp)
-            grep -v $link $PUCKMAN_LIST > $t
-            echo "$link##$(basename $download_link)" >> $t
-            mv $t $PUCKMAN_LIST
+            local t
+            t=$(mktemp)
+            awk -F'#' -v l="$link" -v new="$pick_line" '
+                $1 == l { if (!done) { print new; done = 1 }; next }
+                { print }
+            ' "$PUCKMAN_LIST" > "$t"
+            mv "$t" "$PUCKMAN_LIST"
         else
-            echo "$link##$(basename $download_link)" >> $PUCKMAN_LIST
+            printf '%s\n' "$pick_line" >> "$PUCKMAN_LIST"
         fi
     fi
     
-    download_file=$(basename $download_link)
+    download_file=$(basename "$download_link")
     if [[ -z "$download_file" ]]; then
         echo "download link is wrong or bad format. Download link is: $download_link" && return 1
     fi
@@ -439,9 +453,10 @@ install(){
             echo "It is a debian package. Install with dpkg:"
             local package_name=$(dpkg-deb -I  $PUCKMAN_PKG/$download_file  | grep -Po '(?<=Package: ).*')
             local package_version=$(dpkg-deb -I  $PUCKMAN_PKG/$download_file  | grep -Po '(?<=Version: ).*')
-            if dpkg --get-selections | grep $package_name &> /dev/null ;then
+            if dpkg-query -s "$package_name" &>/dev/null ;then
                 #already installed, check version
-                local installed_package_version=$(apt show $package_name | grep -Po '(?<=Version: ).*')
+                local installed_package_version
+                installed_package_version=$(apt show "$package_name" 2>/dev/null | grep -Po '(?<=Version: ).*' | head -n1)
                 if [ "$package_version" = "$installed_package_version" ];then 
                     echo ""
                     echo "Version $package_version of package $package_name is already installed"
@@ -462,11 +477,9 @@ install(){
                 # original and final names calculated in archive_count
                 echo "It is an archive with only one file (after discarding irrelevant artifacts). Hopefully a binary alone. Trying to install to /usr/local/bin"
                 echo "Candidate file is: $original_name"
-                cd $PUCKMAN_CACHE
+                cd "$PUCKMAN_CACHE" || return 1
                 # we overwrite in case a wrong package with same file names has been extracted here before
-                unzip -o $PUCKMAN_PKG/$download_file
-                cp "$PUCKMAN_CACHE/$original_name" "$final_name"
-                cd -
+                if unzip -o "$PUCKMAN_PKG/$download_file" && cp "$PUCKMAN_CACHE/$original_name" "$final_name"; then
                 echo "Installed to $final_name"
             else
                 echo There seems to be more than a single binary. 
@@ -500,7 +513,7 @@ install(){
             cp $PUCKMAN_PKG/$original_name "$final_name"
             ;;
         *)
-            if file $PUCKMAN_PKG/$download_file | grep 'ELF\|shell script\|script executable' &> /dev/null ;then
+            if file "$PUCKMAN_PKG/$download_file" | grep 'ELF\|shell script\|script executable' &> /dev/null ;then
                 echo it is a single binary or script
                 echo installing to /usr/local/bin/$(basename $link)
                 cp $PUCKMAN_PKG/$download_file /usr/local/bin/$(basename $link)
