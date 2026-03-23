@@ -47,6 +47,8 @@ get_env_vars(){
     export PUCKMAN_STATE
 }
 
+# Compute edit distance between two strings using a pure bash fallback.
+# Used when python3-pylev is unavailable.
 levenshtein() {
     if [ "$#" -ne "2" ]; then
         echo "Usage: $0 word1 word2" >&2
@@ -89,6 +91,8 @@ levenshtein_pylev(){
     python3 -c 'import pylev, sys; print(pylev.levenshtein(sys.argv[1], sys.argv[2]))' "$1" "$2"
 }
 
+# Pick the best release artifact by minimum Levenshtein distance.
+# Sets global download_link as a side effect.
 calculate_levenshtein(){
     local best_value
     local best_link
@@ -122,6 +126,8 @@ calculate_levenshtein(){
 
 
 # Print numbered menu; on success set var named by $4 to first awk field of chosen line.
+# Render a numbered selection menu and export the chosen first column.
+# Writes selected value into the destination variable name passed by caller.
 pick_numbered_line() {
     local heading="$1" prompt="$2"
     local -n _pick_lines="$3"
@@ -203,6 +209,8 @@ url_timestamp(){
     trim "$output"
 }
 
+# Inspect an archive and report candidate payload count and install target.
+# Returns "count#original_name#final_name" after filtering non-binary artifacts.
 archive_count(){
     #output count of files in archive 
     # if count=1 also orig name and final name
@@ -335,6 +343,8 @@ _try_dl_unique_deb_abi() {
 # Release lines to drop when matching generic/binary assets (checksums, other OS, etc.).
 _gd_exclude_foreign_and_meta='\.(asc|sig|gpg|sha256|sha512|sha1|md5|minisig)$|[-.]sha[0-9]+|checksum|SUMS$|sbom|\.pem$|\.crt$|\.msix$|\.msi$|\.exe$|\.dmg$|\.pkg$|\.deb$|\.rpm$|windows|win32|win64|w64|macos|darwin|apple|osx|android'
 
+# Heuristically choose a release artifact URL for the current system.
+# Uses package-manager hints, architecture filters, and optional regex fallback.
 get_download_link(){
     # Heuristic choice of a release asset URL for this machine (ordered tries).
 
@@ -533,6 +543,8 @@ remove_tracked_files(){
 }
 
 # Extract one binary from zip or tar into PUCKMAN_CACHE and copy to final_name (count==1 path).
+# Extract a single-file archive into cache and install it to the final path.
+# Also writes file install manifest on success.
 install_single_binary_archive() {
     local link="$1" download_file="$2" original_name="$3" final_name="$4" kind="$5"
     echo "It is an archive with only one file (after discarding irrelevant artifacts). Hopefully a binary alone. Trying to install to /usr/local/bin"
@@ -569,6 +581,8 @@ packages_txt_match_count() {
     printf '%s' "$m"
 }
 
+# Resolve user input into an owner/repo link from packages.txt.
+# Accepts direct owner/repo input and rejects ambiguous matches.
 resolve_package_to_link(){
     local term="$1"
     local matches
@@ -589,6 +603,8 @@ resolve_package_to_link(){
     fi
 }
 
+# Remove a previously installed package using recorded install manifests.
+# Supports deb, file, and pip install kinds.
 uninstall(){
     local link mf kind
     link=$(resolve_package_to_link "$package") || return 1
@@ -628,6 +644,8 @@ uninstall(){
     echo "Uninstalled $link (manifest removed)."
 }
 
+# Main install workflow: resolve package, pick artifact, install, and record manifest.
+# May modify package list entries and perform network/package-manager operations.
 install(){
     local link=""
     local regex=""
@@ -844,6 +862,8 @@ file_age(){
         echo -n "0 days"
     fi
 }
+# Build or display cached project descriptions with stars from GitHub metadata.
+# Root mode refreshes cache; non-root mode reads existing description cache.
 list(){
     local n=15
     local n_days_ago=/tmp/${n}_days_ago
@@ -897,6 +917,8 @@ user_is_root(){
     fi
     return 0
 }
+# Validate runtime dependencies and required storage paths before actions run.
+# Prompts to create missing directories for configured PUCKMAN paths.
 check_environment (){
     local var_path
     local var_value
@@ -965,6 +987,8 @@ is_git_repo(){
     return $? # 0 = git repository
 }
 
+# Update puckman itself from git or from remote script URL with checksum check.
+# Chooses git pull for repo installs, otherwise downloads and replaces script file.
 update(){
     if is_git_repo "$__dir";then
         # repo must be 'pristine' for this to work
