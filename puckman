@@ -932,9 +932,9 @@ install_requirements(){
     echo "This will install required and recommended packages:"
     echo "sudo $cmd"
     while true; do
-        read -rp "Proceed? y / n: " yn < "$TTY"
+        read -rp "Proceed? [Y/n]: " yn < "$TTY"
         case $yn in
-            [Yy] )
+            ""|[Yy] )
                 if ! type apt &>/dev/null; then
                     echo "apt is not available on this system."
                     return 1
@@ -1009,9 +1009,9 @@ check_environment (){
             echo PATH: $var_path
             echo
             while true; do
-                read -rp "Should I try to create $var_path? y / n: " yn < $TTY
+                read -rp "Should I try to create $var_path? [Y/n]: " yn < "$TTY"
                 case $yn in
-                    [Yy] )
+                    ""|[Yy] )
                         mkdir -p "$var_path"
                         break
                         ;;
