@@ -862,6 +862,7 @@ file_age(){
         echo -n "0 days"
     fi
 }
+
 # Build or display cached project descriptions with stars from GitHub metadata.
 # Root mode refreshes cache; non-root mode reads existing description cache.
 list(){
@@ -911,12 +912,45 @@ readconfig(){
     rm -f "$tmpfile"
 }
 
+apt_install_requirements_cmd() {
+    # Keep this list aligned with check_environment() required tool checks.
+    local required="file jq wget python3 sudo coreutils bzip2 unzip bsdextrautils"
+    local recommended="python3-pylev"
+    printf 'apt update && apt install -y %s %s\n' "$required" "$recommended"
+}
+
 user_is_root(){
     if [ "$EUID" -ne 0 ];then
         return 1
     fi
     return 0
 }
+
+install_requirements(){
+    local cmd
+    cmd=$(apt_install_requirements_cmd)
+    echo "This will install required and recommended packages:"
+    echo "sudo $cmd"
+    while true; do
+        read -rp "Proceed? y / n: " yn < "$TTY"
+        case $yn in
+            [Yy] )
+                if ! type apt &>/dev/null; then
+                    echo "apt is not available on this system."
+                    return 1
+                fi
+                apt update && apt install -y file jq wget python3 sudo coreutils bzip2 unzip bsdextrautils python3-pylev
+                return $?
+                ;;
+            [Nn] )
+                echo "Cancelled."
+                return 1
+                ;;
+            * ) echo "Please answer with y or n.";;
+        esac
+    done
+}
+
 # Validate runtime dependencies and required storage paths before actions run.
 # Prompts to create missing directories for configured PUCKMAN paths.
 check_environment (){
@@ -934,6 +968,9 @@ check_environment (){
                 column)
                     echo "Please install column: e.g. apt install bsdextrautils or bsdmainutils"
                     ;;
+                wget)
+                    echo "Please install wget: e.g. apt install wget"
+                    ;;
                 *)
                     echo "Please install $dep: e.g. apt install $dep"
                     ;;
@@ -941,6 +978,13 @@ check_environment (){
             dependencies_exist=false
         fi
     done
+    local apt_cmd
+    apt_cmd=$(apt_install_requirements_cmd)
+    echo "Install all requirements with:"
+    echo "sudo $apt_cmd"
+    if ! python3 -c "import pylev" &>/dev/null; then
+        echo "Recommended: install python3-pylev for faster artifact matching."
+    fi
     if ! { date -d @0 +%s &>/dev/null && stat --format %s "${BASH_SOURCE[0]}" &>/dev/null; }; then
         echo "Please install GNU coreutils: e.g. apt install coreutils"
         dependencies_exist=false
@@ -1066,6 +1110,12 @@ Actions:
     update
             updates puckman downloading the latest code from Github
 
+    requirements   (aliases: deps, install-deps)
+            installs required + recommended dependencies after confirmation
+
+Dependencies install command:
+    sudo $(apt_install_requirements_cmd)
+
 "
 
 WGET="wget -T 5 --tries=1 --backups=2"
@@ -1080,6 +1130,9 @@ case $# in
         case "$1" in
             update|upgrade)
                 action=update
+                ;;
+            requirements|deps|install-deps)
+                action=requirements
                 ;;
             h|-h|--help|help)
                 echo "$usage" && exit 0
@@ -1107,10 +1160,17 @@ get_github_token
 
 readconfig
 
-check_environment
+if [ "$action" != "requirements" ]; then
+    check_environment
+fi
 
 
 case $action in
+    requirements)
+        user_is_root || { echo "User must be root to $action" && exit 1 ;}
+        TTY=$(tty)
+        install_requirements
+        ;;
     update)
         user_is_root || { echo "User must be root to $action puckman" && exit 1 ;}
         update
