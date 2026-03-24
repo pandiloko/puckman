@@ -1,8 +1,6 @@
 # puckman
 
-Installs software directly from GitHub repos and release artifacts. The goal is a simple "install from upstream releases" workflow, especially for fresh versions that may not be available in distro repositories yet.
-
-Installs software directly from github repos. I wanted an approach to what Arch and AUR provide: cutting edge versions of software fresh from the repo oven.
+Installs software directly from GitHub repos and release artifacts. I wanted an approach similar to what Arch and AUR provide but for debian based distros: cutting edge versions of software fresh from the repo oven. No nightly builds or compile sources, though. Only official releases. 
 
 The name `puckman` comes after the `pacman` command from Arch and is the original internal name of Pac-Man, the videogame character (a hockey-puck-like shape).
 
@@ -10,7 +8,7 @@ The name `puckman` comes after the `pacman` command from Arch and is the origina
 
 - Resolves packages from a configured list (`packages.txt`) or lets you search GitHub.
 - It smartly identifies the appropriate installer from the list of release artifact (don't get carried away, this intelligent detection is just a bunch of 'ifs'). 
-- Fallback to manual selection whenever the detection fails, but saves the selection and uses it for future updates comparing using levenshtein algorithm
+- Fallback to manual selection whenever the detection fails, but saves the selection and uses it for future updates comparing artifacts using levenshtein algorithm
 - Supports install paths for `.deb`, archives (`zip`, `tar.*`, `bz2`), and executable/script artifacts.
 - Supports pip-based installs when a package entry is configured with a pip command.
 - Records install manifests (v3.0+) under `PUCKMAN_STATE` (default `/var/lib/puckman/installed/`) so uninstalls are reversible.
