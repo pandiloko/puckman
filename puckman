@@ -6,13 +6,22 @@ get_github_token(){
         "$HOME/.githubtoken"
         "/etc/githubtoken"
     )
+    # Environment variable takes precedence over configured token files.
+    if [ -n "${GITHUB_TOKEN:-}" ]; then
+        GITHUB_AUTH_HEADER=("--header" "Authorization: token ${GITHUB_TOKEN}")
+        export GITHUB_AUTH_HEADER
+        return 0
+    fi
     for l in "${locations[@]}"; do
         if [ -f "$l" ];then
-            GITHUB_TOKEN=("--header" "Authorization: token $(cat "$l")")
-            export GITHUB_TOKEN
+            GITHUB_AUTH_HEADER=("--header" "Authorization: token $(cat "$l")")
+            export GITHUB_AUTH_HEADER
             break
         fi
     done
+    if [ -z "${GITHUB_AUTH_HEADER[*]}" ]; then
+        echo "Warning: running without a GitHub token. Public API access is rate-limited and may return empty results." >&2
+    fi
 }
 
 get_env_vars(){
@@ -117,9 +126,10 @@ calculate_levenshtein(){
             best_value=$current_value
         fi
     done < <( github_release "$link" )
-    download_link=$best_link
-    echo "best value: $best_value"
-    echo "best link: $best_link"
+    echo "No exact artifact match for prior editor pick: $1"
+    echo "Closest candidate (distance $best_value): $best_link"
+    echo "Will continue with regular heuristics/manual selection."
+    return 1
 }
 
 
@@ -164,10 +174,25 @@ github_search(){
     # query github with query string and return projects sorted by stars
     local query="$1"
     local enc
+    local response
+    local count
     enc=$(python3 -c 'import urllib.parse, sys; print(urllib.parse.quote(sys.argv[1], safe=""))' "$query")
-    $WGET --header "Accept: application/vnd.github+json" "${GITHUB_TOKEN[@]}" \
-        "https://api.github.com/search/repositories?q=${enc}+in:name,description" -qO - \
-    | jq  -r '.items | sort_by(.stargazers_count) |reverse | .[]| "\(.full_name)\t\(.stargazers_count)\t\(.description)"'  | head -n20 | column -ts $'\t'
+    response=$($WGET --header "Accept: application/vnd.github+json" "${GITHUB_AUTH_HEADER[@]}" \
+        "https://api.github.com/search/repositories?q=${enc}+in:name,description" -qO - 2>/dev/null)
+    count=$(jq -r '.items | length // 0' <<< "$response" 2>/dev/null)
+    if [ -z "$count" ] || [ "$count" = "0" ]; then
+        local api_msg
+        api_msg=$(jq -r '.message // empty' <<< "$response" 2>/dev/null)
+        if [[ "$api_msg" == *"API rate limit exceeded"* ]]; then
+            echo "Warning: GitHub API rate limit exceeded for search requests." >&2
+            echo "Warning: Export GITHUB_TOKEN to override configured token files and increase API limits." >&2
+            return 1
+        fi
+        echo "Warning: GitHub search returned no repositories." >&2
+        echo "Warning: This can happen due to unauthenticated API limits; configure a GitHub token if this keeps happening." >&2
+        return 1
+    fi
+    jq  -r '.items | sort_by(.stargazers_count) |reverse | .[]| "\(.full_name)\t\(.stargazers_count)\t\(.description)"' <<< "$response" | head -n20 | column -ts $'\t'
 }
 
 github_release_picker(){
@@ -178,8 +203,24 @@ github_release_picker(){
 }
 
 github_release(){
+    local response
+    local count
     if [ -n "$1" ];then
-        $WGET --header "Accept: application/vnd.github+json" "${GITHUB_TOKEN[@]}" "https://api.github.com/repos/$1/releases/latest" -qO - | jq -r '.assets[].browser_download_url'        
+        response=$($WGET --header "Accept: application/vnd.github+json" "${GITHUB_AUTH_HEADER[@]}" "https://api.github.com/repos/$1/releases/latest" -qO - 2>/dev/null)
+        count=$(jq -r '.assets | length // 0' <<< "$response" 2>/dev/null)
+        if [ -z "$count" ] || [ "$count" = "0" ]; then
+            local api_msg
+            api_msg=$(jq -r '.message // empty' <<< "$response" 2>/dev/null)
+            if [[ "$api_msg" == *"API rate limit exceeded"* ]]; then
+                echo "Warning: GitHub API rate limit exceeded while fetching releases for $1." >&2
+                echo "Warning: Export GITHUB_TOKEN to override configured token files and increase API limits." >&2
+                return 1
+            fi
+            echo "Warning: GitHub release query returned no assets for $1." >&2
+            echo "Warning: This can happen due to unauthenticated API limits or projects without published release artifacts." >&2
+            return 1
+        fi
+        jq -r '.assets[].browser_download_url' <<< "$response"
     else
         echo "Please provide github  <user/project> string e.g. borgbackup/borg"; 
         return 1
@@ -649,11 +690,13 @@ uninstall(){
 install(){
     local link=""
     local regex=""
+    local editors_pick=""
     local download_link=""
     local download_file=""
     local original_name=""
     local final_name=""
     local count=0    
+    local use_saved_artifact=0
     
     local matches
     matches=$(packages_txt_match_count "$package")
@@ -684,6 +727,9 @@ install(){
         if [[ -z "$regex" ]]; then
             echo "No regex defined: $link"
         fi
+        if [[ -n "$editors_pick" ]]; then
+            use_saved_artifact=1
+        fi
     fi
     # At this point we should have at least a desired project
     # Ensure owner/repo (link) is recorded — not the user's fuzzy search term
@@ -704,7 +750,7 @@ install(){
     fi
     
     #If we have recorded latest pick, use that to find out the best candidate
-    if [ -n "$editors_pick" ];then
+    if [ "$use_saved_artifact" -eq 1 ];then
         # first try an easy win
         download_link=""
         while IFS= read -r u; do
@@ -875,7 +921,7 @@ list(){
             tmp_file=$(mktemp)
             while read -r project;do
                 #TODO: fix me
-                { echo -en "$project\t"; $WGET  --header "Accept: application/vnd.github+json" "${GITHUB_TOKEN[@]}" "https://api.github.com/repos/$project" -qO - | jq .stargazers_count,.description | awk -v d="\t" '{s=(NR==1?s:s d)$0}END{print s}' ;} >> "$tmp_file"
+                { echo -en "$project\t"; $WGET  --header "Accept: application/vnd.github+json" "${GITHUB_AUTH_HEADER[@]}" "https://api.github.com/repos/$project" -qO - | jq .stargazers_count,.description | awk -v d="\t" '{s=(NR==1?s:s d)$0}END{print s}' ;} >> "$tmp_file"
             done < <(cut -d '#' -f 1 "$PUCKMAN_LIST"| grep '/')
             mv "$tmp_file" "$PUCKMAN_DESCRIPTIONS"
         fi
@@ -1083,7 +1129,7 @@ __base="$(basename ${__file} .sh)"
 __root="$(cd "$(dirname "${__dir}")" && pwd)"
 
 usage="
-puckman (v3.1)
+puckman (v3.2)
 =======
 Installs software from github releases
 
@@ -1099,7 +1145,7 @@ Actions:
             duh!
 
     uninstall <package name>   (aliases: remove, delete)
-            remove installs recorded since v3.1 (see PUCKMAN_STATE)
+            remove installs recorded since v3.2 (see PUCKMAN_STATE)
 
     search <search term>
             searches repositories in github. It presents a limited set of the
@@ -1116,10 +1162,14 @@ Actions:
 Dependencies install command:
     sudo $(apt_install_requirements_cmd)
 
+GitHub token:
+    Export GITHUB_TOKEN to override configured token files
+    ($HOME/Sync/$USER/.githubtoken, $HOME/.githubtoken, /etc/githubtoken)
+
 "
 
 WGET="wget -T 5 --tries=1 --backups=2"
-GITHUB_TOKEN=""
+GITHUB_AUTH_HEADER=()
 UPDATE_LINK="https://raw.githubusercontent.com/pandiloko/puckman/master/puckman"
 
 case $# in
